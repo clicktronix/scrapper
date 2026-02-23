@@ -1,0 +1,23 @@
+services:
+  scraper:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "${SCRAPER_PORT:-8001}:${SCRAPER_PORT:-8001}"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${SCRAPER_PORT:-8001}/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-files: "3"
