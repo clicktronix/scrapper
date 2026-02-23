@@ -4,10 +4,12 @@
 
 ## Что делает
 
-- **Скрейпит** Instagram-профили через `instagrapi` — посты, рилсы, хайлайты, метрики
+- **Скрейпит** Instagram-профили через HikerAPI (SaaS) или instagrapi — посты, рилсы, хайлайты, метрики
 - **Анализирует** контент через OpenAI Batch API (`gpt-5-nano`, structured outputs) — тематика, аудитория, коммерция
+- **Классифицирует** блогеров: категории, теги (3-уровневая таксономия), embedding для семантического поиска
+- **Загружает** изображения (аватары, thumbnails постов) в Supabase Storage
 - **Открывает** новых блогеров по хештегам — автоматический discovery
-- **Хранит** всё в Supabase PostgreSQL — единая база с платформой
+- **Автоматически** re-scrape устаревших блогов (>60 дней) по подписчикам DESC
 
 ## Архитектура
 
@@ -16,7 +18,7 @@
                     │           Supabase PostgreSQL         │
                     │                                      │
                     │  scrape_tasks  blogs  blog_posts     │
-                    │  blog_highlights  blog_categories    │
+                    │  blog_highlights  categories  tags   │
                     └─────────┬──────────────┬─────────────┘
                               │              │
                          poll │              │ upsert
@@ -39,17 +41,15 @@
                     └──────────│──────────────│────────────┘
                                │              │
                     ┌──────────▼───┐   ┌──────▼───────────┐
-                    │  Instagram   │   │  OpenAI Batch    │
-                    │  (instagrapi)│   │  API (gpt-5-nano)│
-                    │              │   │                   │
-                    │  AccountPool │   │  Structured       │
-                    │  + ротация   │   │  Outputs          │
+                    │  HikerAPI    │   │  OpenAI Batch    │
+                    │  (SaaS)      │   │  API (gpt-5-nano)│
+                    │      или     │   │                   │
+                    │  instagrapi  │   │  Structured       │
+                    │  (локальный) │   │  Outputs          │
                     └──────────────┘   └───────────────────┘
 ```
 
 Подробнее: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-
-Текущие intentional отклонения для тестового режима запуска: [`docs/TEST_MODE_NOTES.md`](docs/TEST_MODE_NOTES.md)
 
 ## Быстрый старт
 
@@ -59,37 +59,33 @@
 - [uv](https://docs.astral.sh/uv/) (менеджер пакетов)
 - Supabase проект с таблицами (см. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#схема-базы-данных))
 - OpenAI API ключ
-- 1+ Instagram-аккаунт с residential-прокси
+- HikerAPI токен **или** Instagram-аккаунт(ы) с residential-прокси
 
 ### Установка
 
 ```bash
-# Склонировать и установить зависимости
 cd scraper
 uv sync
 
-# Скопировать и заполнить переменные окружения
 cp .env.example .env
-# Редактировать .env — заполнить Supabase, OpenAI, аккаунты
+# Заполнить .env — Supabase, OpenAI, HikerAPI/аккаунты
 ```
 
 ### Запуск
 
 ```bash
-# Локально (API :8001 + воркер в одном процессе)
+# Локально (API :8001 + воркер + scheduler в одном процессе)
 uv run python src/main.py
 
 # Docker
 docker compose up -d
-
-# Логи
 docker compose logs -f scraper
 ```
 
 ### Тесты
 
 ```bash
-uv run pytest tests/ -v          # Все тесты (420)
+uv run pytest tests/ -v          # Все тесты (600+)
 uv run pytest tests/ -v -x       # Остановиться на первом падении
 uv run pytest tests/test_ai/ -v  # Только AI-модуль
 uv run pytest tests/test_api/ -v # Только API-модуль
@@ -97,7 +93,9 @@ uv run pytest tests/test_api/ -v # Только API-модуль
 
 ## API
 
-HTTP API на порту `8001` (конфигурируемо через `SCRAPER_PORT`). Авторизация: `Authorization: Bearer <SCRAPER_API_KEY>`.
+HTTP API на порту `8001` (конфигурируемо через `SCRAPER_PORT`). Rate limit: 60 req/мин per IP.
+
+Auth: `Authorization: Bearer <SCRAPER_API_KEY>`
 
 | Метод | Путь | Auth | Описание |
 |-------|------|------|----------|
@@ -106,6 +104,7 @@ HTTP API на порту `8001` (конфигурируемо через `SCRAPE
 | `GET` | `/api/tasks/{id}` | Да | Статус конкретной задачи |
 | `POST` | `/api/tasks/scrape` | Да | Создать full_scrape по списку username |
 | `POST` | `/api/tasks/discover` | Да | Создать discover по хештегу |
+| `POST` | `/api/tasks/{id}/retry` | Да | Повторить упавшую задачу (только failed) |
 
 ### Примеры
 
@@ -125,8 +124,12 @@ curl -X POST http://localhost:8001/api/tasks/discover \
   -H "Content-Type: application/json" \
   -d '{"hashtag": "алматымама", "min_followers": 1000}'
 
-# Список задач
-curl "http://localhost:8001/api/tasks?status=pending&limit=10" \
+# Список упавших задач
+curl "http://localhost:8001/api/tasks?status=failed" \
+  -H "Authorization: Bearer $SCRAPER_API_KEY"
+
+# Повторить упавшую задачу
+curl -X POST http://localhost:8001/api/tasks/<task-id>/retry \
   -H "Authorization: Bearer $SCRAPER_API_KEY"
 ```
 
@@ -134,10 +137,11 @@ curl "http://localhost:8001/api/tasks?status=pending&limit=10" \
 
 ```
 src/
-├── main.py                  # Точка входа — API + воркер (asyncio.gather)
+├── main.py                  # Точка входа — API + воркер + scheduler
 ├── config.py                # Настройки из .env (Pydantic Settings)
 ├── database.py              # CRUD-операции с Supabase
 ├── storage.py               # Supabase Storage для Instagram-сессий
+├── image_storage.py         # Загрузка изображений в Supabase Storage
 │
 ├── api/
 │   ├── app.py               # FastAPI-приложение (create_app)
@@ -149,20 +153,24 @@ src/
 │
 ├── ai/
 │   ├── prompt.py            # Мультимодальный промпт (текст + изображения)
-│   ├── batch.py             # OpenAI Batch API — отправка, поллинг, парсинг
-│   └── schemas.py           # AIInsights — structured output схема
+│   ├── batch.py             # OpenAI Batch API + match_categories + match_tags
+│   ├── schemas.py           # AIInsights — structured output схема
+│   ├── taxonomy.py          # CATEGORIES + TAGS (3-уровневая таксономия)
+│   ├── embedding.py         # text-embedding-3-small (1536 dims)
+│   └── images.py            # Подготовка изображений для мультимодального анализа
 │
 ├── platforms/
 │   ├── base.py              # BaseScraper — абстрактный интерфейс
 │   └── instagram/
+│       ├── hiker_scraper.py # HikerAPI бэкенд (SaaS, SafeHikerClient)
+│       ├── scraper.py       # instagrapi бэкенд (локальный, AccountPool)
 │       ├── client.py        # AccountPool — ротация аккаунтов
-│       ├── scraper.py       # InstagramScraper — сбор данных
 │       ├── metrics.py       # ER, тренд, частота публикаций
-│       └── exceptions.py    # Кастомные исключения
+│       └── exceptions.py    # HikerAPIError, InsufficientBalanceError
 │
 └── worker/
     ├── loop.py              # Polling loop с graceful shutdown
-    ├── handlers.py          # Обработчики задач
+    ├── handlers.py          # Обработчики задач (full_scrape, ai_analysis, discover)
     └── scheduler.py         # APScheduler — cron-задачи
 ```
 
@@ -170,32 +178,34 @@ src/
 
 | Тип | Приоритет | Что делает |
 |-----|-----------|-----------|
-| `full_scrape` | 1-5 | Полный скрейп профиля: посты, рилсы, хайлайты, метрики |
-| `ai_analysis` | 3 | AI-анализ через OpenAI Batch API (батчами по 10+) |
+| `full_scrape` | 3-8 | Полный скрейп профиля: посты, рилсы, хайлайты, метрики, изображения |
+| `ai_analysis` | 3 | AI-анализ через OpenAI Batch API (батчами по 10+), категоризация, теги, embedding |
 | `discover` | 10 | Поиск новых блогеров по хештегу |
 
 ## Переменные окружения
 
-Все переменные описаны в [`.env.example`](.env.example). Ключевые группы:
+Все переменные описаны в [`.env.example`](.env.example). Ключевые:
 
 | Группа | Переменные | Описание |
 |--------|-----------|----------|
-| Supabase | `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` | Подключение к БД |
+| Supabase | `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` | Подключение к БД и Storage |
 | OpenAI | `OPENAI_API_KEY` | API ключ для Batch API |
-| Instagram | `INSTAGRAM_ACCOUNTS`, `IG_*_USERNAME/PASSWORD` | Аккаунты для скрейпинга |
-| Прокси | `PROXY_*` | Residential прокси (по одному на аккаунт) |
-| Rate limits | `REQUESTS_PER_HOUR`, `COOLDOWN_MINUTES` | Защита от бана |
+| HikerAPI | `SCRAPER_BACKEND`, `HIKERAPI_TOKEN` | SaaS-бэкенд скрапинга |
+| Instagram | `INSTAGRAM_ACCOUNTS`, `IG_*_USERNAME/PASSWORD` | Аккаунты (instagrapi бэкенд) |
+| Прокси | `PROXY_*` | Residential прокси (instagrapi) |
 | Worker | `WORKER_POLL_INTERVAL`, `WORKER_MAX_CONCURRENT` | Параметры воркера |
+| API | `SCRAPER_PORT`, `SCRAPER_API_KEY` | HTTP API |
 
 ## Технологии
 
 | Компонент | Технология |
 |-----------|-----------|
 | Язык | Python 3.13 |
-| Instagram API | instagrapi 2.1+ |
+| Скрейпинг | HikerAPI (SaaS) / instagrapi 2.1+ |
 | AI-анализ | OpenAI Batch API (gpt-5-nano) |
-| База данных | Supabase PostgreSQL |
-| Хранилище | Supabase Storage (сессии) |
+| Embedding | text-embedding-3-small (1536 dims) |
+| База данных | Supabase PostgreSQL + pgvector |
+| Хранилище | Supabase Storage (сессии, изображения) |
 | Планировщик | APScheduler 3.x |
 | Валидация | Pydantic 2.x |
 | Пакеты | uv |
