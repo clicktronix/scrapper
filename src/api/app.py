@@ -1,11 +1,13 @@
 """FastAPI-приложение скрапера."""
 import hmac
 import time
+import uuid
 from collections import defaultdict
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
+from postgrest.exceptions import APIError as PostgrestAPIError
 from postgrest.types import CountMethod
 from supabase import Client
 
@@ -19,7 +21,7 @@ from src.api.schemas import (
     TaskListResponse,
 )
 from src.config import Settings
-from src.database import create_task_if_not_exists, is_blog_fresh, run_in_thread
+from src.database import cleanup_orphan_person, create_task_if_not_exists, is_blog_fresh, run_in_thread
 from src.platforms.instagram.client import AccountPool
 
 security = HTTPBearer(auto_error=False)
@@ -28,6 +30,14 @@ security = HTTPBearer(auto_error=False)
 RATE_LIMIT_MAX_REQUESTS = 60
 RATE_LIMIT_WINDOW_SECONDS = 60
 _rate_limit_store: dict[str, list[float]] = defaultdict(list)
+
+
+def _validate_uuid(value: str) -> None:
+    """Проверить что строка — валидный UUID. Бросает 422 при ошибке."""
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid UUID: {value}")
 
 
 def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> FastAPI:
@@ -147,8 +157,9 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
         }
 
     @app.get("/api/tasks/{task_id}", dependencies=[Depends(check_rate_limit), Depends(verify_api_key)])
-    async def get_task(task_id: str) -> dict:
+    async def get_task(task_id: str = Path(description="UUID задачи")) -> dict:
         """Получить задачу по ID."""
+        _validate_uuid(task_id)
         result = await run_in_thread(
             db.table("scrape_tasks").select("*").eq("id", task_id).execute
         )
@@ -210,8 +221,9 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
         response_model=RetryResponse,
         dependencies=[Depends(check_rate_limit), Depends(verify_api_key)],
     )
-    async def retry_task(task_id: str) -> dict:
+    async def retry_task(task_id: str = Path(description="UUID задачи")) -> dict:
         """Повторить упавшую задачу — сбросить в pending."""
+        _validate_uuid(task_id)
         result = await run_in_thread(
             db.table("scrape_tasks").select("id, status").eq("id", task_id).execute
         )
@@ -271,8 +283,8 @@ async def _find_or_create_blog(db: Client, username: str) -> str:
             .execute
         )
         return blog_result.data[0]["id"]
-    except Exception:
-        # Race condition: параллельный запрос уже создал блог — ищем повторно
+    except PostgrestAPIError:
+        # Race condition: параллельный запрос уже создал блог (unique constraint) — ищем повторно
         blog_result = await run_in_thread(
             db.table("blogs")
             .select("id")
@@ -281,22 +293,9 @@ async def _find_or_create_blog(db: Client, username: str) -> str:
             .execute
         )
         # Всегда чистим orphan person (создан этим запросом, не привязан к блогу)
-        await _cleanup_orphan_person(db, person_id)
+        await cleanup_orphan_person(db, person_id)
         if blog_result.data:
             return blog_result.data[0]["id"]
         raise
 
 
-async def _cleanup_orphan_person(db: Client, person_id: str) -> None:
-    """Удалить person без привязанных блогов (orphan от race condition)."""
-    try:
-        # Проверяем, что person действительно orphan (нет блогов)
-        blogs = await run_in_thread(
-            db.table("blogs").select("id").eq("person_id", person_id).limit(1).execute
-        )
-        if not blogs.data:
-            await run_in_thread(
-                db.table("persons").delete().eq("id", person_id).execute
-            )
-    except Exception:
-        pass  # Не критично — orphan cleanup best-effort

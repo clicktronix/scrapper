@@ -77,6 +77,13 @@ async def process_task(
 
         except Exception as e:
             logger.exception(f"Unhandled error in task {task_id}: {e}")
+            try:
+                await mark_task_failed(
+                    db, task_id, attempts, max_attempts,
+                    f"Unhandled error: {e}", retry=True,
+                )
+            except Exception as fail_err:
+                logger.error(f"Failed to mark task {task_id} as failed: {fail_err}")
 
 
 async def run_worker(

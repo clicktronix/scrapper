@@ -19,6 +19,7 @@ from src.ai.batch import (
 from src.ai.embedding import build_embedding_text, generate_embedding
 from src.config import Settings
 from src.database import (
+    cleanup_orphan_person,
     create_task_if_not_exists,
     is_blog_fresh,
     mark_task_done,
@@ -39,21 +40,6 @@ from src.platforms.instagram.exceptions import (
     InsufficientBalanceError,
     PrivateAccountError,
 )
-
-
-async def _cleanup_orphan_person(db: Client, person_id: str) -> None:
-    """Удалить person без привязанных блогов (best-effort cleanup)."""
-    try:
-        blogs = await run_in_thread(
-            db.table("blogs").select("id").eq("person_id", person_id).limit(1).execute
-        )
-        if not blogs.data:
-            await run_in_thread(
-                db.table("persons").delete().eq("id", person_id).execute
-            )
-    except Exception:
-        # Cleanup не должен ломать обработку основной задачи
-        pass
 
 
 def _normalize_username(username: str) -> str:
@@ -410,6 +396,8 @@ async def handle_ai_analysis(
         .select("id, blog_id, created_at, attempts, max_attempts")
         .eq("task_type", "ai_analysis")
         .eq("status", "pending")
+        .order("created_at", desc=False)
+        .limit(100)
         .execute
     )
     pending_tasks = pending_result.data
@@ -667,22 +655,28 @@ async def handle_discover(
                                sanitize_error(str(e)), retry=True)
         return
 
+    # Батчевая проверка существующих блогов (вместо N отдельных запросов)
+    normalized_usernames = [_normalize_username(p.username) for p in discovered]
+    existing_blogs_result = await run_in_thread(
+        db.table("blogs")
+        .select("id, username, scraped_at")
+        .eq("platform", "instagram")
+        .in_("username", normalized_usernames)
+        .execute
+    )
+    existing_blogs_by_username: dict[str, dict[str, Any]] = {
+        b["username"]: b for b in existing_blogs_result.data
+    }
+
     new_count = 0
     for profile in discovered:
         normalized_username = _normalize_username(profile.username)
 
-        # Проверяем, нет ли уже такого блога
-        existing = await run_in_thread(
-            db.table("blogs")
-            .select("id")
-            .eq("platform", "instagram")
-            .eq("username", normalized_username)
-            .limit(1)
-            .execute
-        )
-        if existing.data:
+        # Проверяем, нет ли уже такого блога (из батчевого запроса)
+        existing_blog = existing_blogs_by_username.get(normalized_username)
+        if existing_blog:
             # Для существующих блогов: проверить свежесть
-            blog_id = existing.data[0]["id"]
+            blog_id = existing_blog["id"]
             if not await is_blog_fresh(db, blog_id, settings.rescrape_days):
                 try:
                     await create_task_if_not_exists(db, blog_id, "full_scrape", priority=5)
@@ -728,7 +722,7 @@ async def handle_discover(
             new_count += 1
         except Exception as e:
             if person_id:
-                await _cleanup_orphan_person(db, person_id)
+                await cleanup_orphan_person(db, person_id)
             logger.error(f"Failed to create profile @{profile.username}: {e}")
             continue
 

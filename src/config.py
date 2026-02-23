@@ -4,7 +4,7 @@ from functools import cached_property
 from pathlib import Path
 
 from dotenv import dotenv_values
-from pydantic import SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,12 +45,12 @@ def _parse_account_credentials(env_file: str = ".env") -> list[AccountCredential
         upper = name.upper()
         username = env.get(f"IG_{upper}_USERNAME", "")
         password = env.get(f"IG_{upper}_PASSWORD", "")
-        proxy = env.get(f"PROXY_{upper}", "")
-        totp_seed = env.get(f"IG_{upper}_TOTP_SEED", "")
+        proxy = env.get(f"PROXY_{upper}", "") or ""
+        totp_seed = env.get(f"IG_{upper}_TOTP_SEED", "") or ""
         if username and password:
             result.append(AccountCredentials(
                 name=name, username=username, password=password,
-                proxy=proxy, totp_seed=totp_seed or "",
+                proxy=proxy, totp_seed=totp_seed,
             ))
 
     return result
@@ -93,7 +93,10 @@ class Settings(BaseSettings):
 
     # API
     scraper_api_key: SecretStr
-    scraper_port: int = 8001
+    scraper_port: int = Field(
+        default=8001,
+        validation_alias=AliasChoices("SCRAPER_PORT", "PORT"),
+    )
 
     # Фильтрация свежести
     rescrape_days: int = 60  # Минимальный интервал между скрапами (дни)

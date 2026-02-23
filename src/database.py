@@ -223,6 +223,20 @@ async def recover_stuck_tasks(
     return recovered
 
 
+async def cleanup_orphan_person(db: Client, person_id: str) -> None:
+    """Удалить person без привязанных блогов (best-effort cleanup)."""
+    try:
+        blogs = await run_in_thread(
+            db.table("blogs").select("id").eq("person_id", person_id).limit(1).execute
+        )
+        if not blogs.data:
+            await run_in_thread(
+                db.table("persons").delete().eq("id", person_id).execute
+            )
+    except Exception:
+        pass  # Не критично — orphan cleanup best-effort
+
+
 async def upsert_blog(db: Client, blog_id: str, data: dict) -> None:
     """Обновить данные блога из скрапинга."""
     await run_in_thread(

@@ -439,11 +439,11 @@ class TestHandleDiscover:
         mock_db.rpc.return_value.execute.return_value = MagicMock()
         table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
 
-        # blogs select — профиль уже существует
+        # batch blogs select — профиль уже существует
         existing_result = MagicMock()
-        existing_result.data = [{"id": "existing-blog"}]
-        eq_chain = table_mock.select.return_value.eq.return_value.eq.return_value
-        eq_chain.limit.return_value.execute.return_value = existing_result
+        existing_result.data = [{"id": "existing-blog", "username": "existing_blogger", "scraped_at": None}]
+        in_chain = table_mock.select.return_value.eq.return_value.in_.return_value
+        in_chain.execute.return_value = existing_result
         mock_db.table.return_value = table_mock
 
         mock_scraper = AsyncMock()
@@ -482,11 +482,11 @@ class TestHandleDiscover:
         mock_db.rpc.return_value.execute.return_value = MagicMock()
         table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
 
-        # blogs select — профиль уже существует
+        # batch blogs select — профиль уже существует
         existing_result = MagicMock()
-        existing_result.data = [{"id": "existing-blog"}]
-        eq_chain = table_mock.select.return_value.eq.return_value.eq.return_value
-        eq_chain.limit.return_value.execute.return_value = existing_result
+        existing_result.data = [{"id": "existing-blog", "username": "stale_blogger", "scraped_at": None}]
+        in_chain = table_mock.select.return_value.eq.return_value.in_.return_value
+        in_chain.execute.return_value = existing_result
         mock_db.table.return_value = table_mock
 
         mock_scraper = AsyncMock()
@@ -615,6 +615,9 @@ def _mock_db_for_batch() -> MagicMock:
     table_mock.eq.return_value = table_mock
     table_mock.update.return_value = table_mock
     table_mock.upsert.return_value = table_mock
+    table_mock.order.return_value = table_mock
+    table_mock.limit.return_value = table_mock
+    table_mock.in_.return_value = table_mock
     table_mock.execute.return_value = MagicMock(data=[])
     db.rpc.return_value.execute.return_value = MagicMock()
     return db
@@ -1398,9 +1401,8 @@ class TestHandleDiscoverEdge:
             person_ok = MagicMock(data=[{"id": "person-2"}])
             blog_ok = MagicMock(data=[{"id": "blog-2"}])
             mock_run.side_effect = [
-                MagicMock(data=[]),  # baduser: blogs select — нет существующих
+                MagicMock(data=[]),  # batch blogs select — ни одного нет
                 RuntimeError("DB insert failed"),  # baduser: person insert crash
-                MagicMock(data=[]),  # gooduser: blogs select — нет существующих
                 person_ok,  # gooduser: person insert OK
                 blog_ok,  # gooduser: blog insert OK
             ]
@@ -1433,7 +1435,7 @@ class TestHandleDiscoverEdge:
         with (
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
             patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
-            patch("src.worker.handlers._cleanup_orphan_person", new_callable=AsyncMock) as mock_cleanup,
+            patch("src.worker.handlers.cleanup_orphan_person", new_callable=AsyncMock) as mock_cleanup,
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
         ):
             mock_run.side_effect = [
@@ -1467,8 +1469,11 @@ class TestHandleDiscoverEdge:
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
             patch("src.worker.handlers.is_blog_fresh", new_callable=AsyncMock, return_value=True),
         ):
-            # Оба профиля уже в базе
-            mock_run.return_value = MagicMock(data=[{"id": "existing"}])
+            # Оба профиля уже в базе (batch query возвращает оба)
+            mock_run.return_value = MagicMock(data=[
+                {"id": "existing-1", "username": "existing1", "scraped_at": None},
+                {"id": "existing-2", "username": "existing2", "scraped_at": None},
+            ])
 
             await handle_discover(db, task, scraper, settings)
 
@@ -1495,8 +1500,10 @@ class TestHandleDiscoverEdge:
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
             patch("src.worker.handlers.is_blog_fresh", new_callable=AsyncMock, return_value=False),
         ):
-            # Блог уже в базе
-            mock_run.return_value = MagicMock(data=[{"id": "existing-blog"}])
+            # Блог уже в базе (batch query с username)
+            mock_run.return_value = MagicMock(data=[
+                {"id": "existing-blog", "username": "stale_user", "scraped_at": None},
+            ])
 
             await handle_discover(db, task, scraper, settings)
 
@@ -1523,7 +1530,9 @@ class TestHandleDiscoverEdge:
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
             patch("src.worker.handlers.is_blog_fresh", new_callable=AsyncMock, return_value=True),
         ):
-            mock_run.return_value = MagicMock(data=[{"id": "existing-blog"}])
+            mock_run.return_value = MagicMock(data=[
+                {"id": "existing-blog", "username": "fresh_user", "scraped_at": None},
+            ])
 
             await handle_discover(db, task, scraper, settings)
 
@@ -1552,7 +1561,7 @@ class TestHandleDiscoverEdge:
         blogs_insert_query = MagicMock()
         blogs_table.select.return_value = blogs_select_query
         blogs_select_query.eq.return_value = blogs_select_query
-        blogs_select_query.limit.return_value = blogs_select_query
+        blogs_select_query.in_.return_value = blogs_select_query
         blogs_select_query.execute.return_value = MagicMock(data=[])
         blogs_table.insert.return_value = blogs_insert_query
         blogs_insert_query.execute.return_value = MagicMock(data=[{"id": "blog-1"}])
@@ -1575,7 +1584,8 @@ class TestHandleDiscoverEdge:
         ):
             await handle_discover(db, task, scraper, settings)
 
-        assert call("username", "test_user") in blogs_select_query.eq.call_args_list
+        # Batch query использует .in_() вместо .eq() для username
+        assert call("username", ["test_user"]) in blogs_select_query.in_.call_args_list
         inserted_blog = blogs_table.insert.call_args[0][0]
         assert inserted_blog["username"] == "test_user"
 

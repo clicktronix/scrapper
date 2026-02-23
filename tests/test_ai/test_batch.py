@@ -809,16 +809,12 @@ class TestMatchCategories:
         ]
         mock_db.table.return_value.select.return_value.execute.return_value = cat_mock
 
-        # upsert возвращает MagicMock (цепочка)
-        upsert_mock = MagicMock()
-        upsert_mock.execute.return_value = MagicMock()
-        mock_db.table.return_value.upsert.return_value = upsert_mock
-
         await match_categories(mock_db, "blog-1", insights)
 
-        # Batch upsert: 1 вызов с 3 записями (1 primary + 2 secondary)
-        assert mock_db.table.return_value.upsert.call_count == 1
-        rows = mock_db.table.return_value.upsert.call_args[0][0]
+        # delete старых + insert новых: 3 записи (1 primary + 2 secondary)
+        assert mock_db.table.return_value.delete.call_count == 1
+        assert mock_db.table.return_value.insert.call_count == 1
+        rows = mock_db.table.return_value.insert.call_args[0][0]
         assert len(rows) == 3
 
     @pytest.mark.asyncio
@@ -853,12 +849,12 @@ class TestMatchCategories:
 
         await match_categories(mock_db, "blog-1", insights)
 
-        # upsert не должен вызываться — нет совпадений
-        mock_db.table.return_value.upsert.assert_not_called()
+        # insert не должен вызываться — нет совпадений
+        mock_db.table.return_value.insert.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_secondary_topics(self) -> None:
-        """Только primary_topic, без secondary → 1 upsert."""
+        """Только primary_topic, без secondary → delete + insert."""
         from src.ai.batch import match_categories
 
         insights = AIInsights()
@@ -872,15 +868,12 @@ class TestMatchCategories:
         ]
         mock_db.table.return_value.select.return_value.execute.return_value = cat_mock
 
-        upsert_mock = MagicMock()
-        upsert_mock.execute.return_value = MagicMock()
-        mock_db.table.return_value.upsert.return_value = upsert_mock
-
         await match_categories(mock_db, "blog-1", insights)
 
-        # Batch upsert: 1 вызов с 1 записью (только primary)
-        assert mock_db.table.return_value.upsert.call_count == 1
-        rows = mock_db.table.return_value.upsert.call_args[0][0]
+        # delete старых категорий + insert новых
+        assert mock_db.table.return_value.delete.call_count == 1
+        assert mock_db.table.return_value.insert.call_count == 1
+        rows = mock_db.table.return_value.insert.call_args[0][0]
         assert len(rows) == 1
         assert rows[0]["is_primary"] is True
 
@@ -901,17 +894,12 @@ class TestMatchCategories:
         ]
         mock_db.table.return_value.select.return_value.execute.return_value = cat_mock
 
-        upsert_mock = MagicMock()
-        upsert_mock.execute.return_value = MagicMock()
-        mock_db.table.return_value.upsert.return_value = upsert_mock
-
         await match_categories(mock_db, "blog-1", insights)
 
         # "BEAUTY".lower() == "beauty" (code) → совпадение
         # "Макияж".lower() == "макияж" (name_lower) → совпадение
-        # Batch upsert: 1 вызов с 2 записями
-        assert mock_db.table.return_value.upsert.call_count == 1
-        rows = mock_db.table.return_value.upsert.call_args[0][0]
+        assert mock_db.table.return_value.insert.call_count == 1
+        rows = mock_db.table.return_value.insert.call_args[0][0]
         assert len(rows) == 2
 
     @pytest.mark.asyncio
@@ -931,15 +919,11 @@ class TestMatchCategories:
         ]
         mock_db.table.return_value.select.return_value.execute.return_value = cat_mock
 
-        upsert_mock = MagicMock()
-        upsert_mock.execute.return_value = MagicMock()
-        mock_db.table.return_value.upsert.return_value = upsert_mock
-
         await match_categories(mock_db, "blog-1", insights)
 
-        # Batch upsert: 1 вызов с 2 записями
-        assert mock_db.table.return_value.upsert.call_count == 1
-        rows = mock_db.table.return_value.upsert.call_args[0][0]
+        # delete + insert: 1 вызов каждый, 2 записи
+        assert mock_db.table.return_value.insert.call_count == 1
+        rows = mock_db.table.return_value.insert.call_args[0][0]
         assert len(rows) == 2
         # Первый — primary (is_primary=True)
         assert rows[0]["is_primary"] is True
@@ -966,15 +950,11 @@ class TestMatchCategories:
         ]
         mock_db.table.return_value.select.return_value.execute.return_value = cat_mock
 
-        upsert_mock = MagicMock()
-        upsert_mock.execute.return_value = MagicMock()
-        mock_db.table.return_value.upsert.return_value = upsert_mock
-
         await match_categories(mock_db, "blog-1", insights)
 
-        # Batch upsert: 1 вызов с 2 записями (beauty дубль пропущен)
-        assert mock_db.table.return_value.upsert.call_count == 1
-        rows = mock_db.table.return_value.upsert.call_args[0][0]
+        # delete + insert: 2 записи (beauty дубль пропущен)
+        assert mock_db.table.return_value.insert.call_count == 1
+        rows = mock_db.table.return_value.insert.call_args[0][0]
         assert len(rows) == 2
 
         # Проверяем, что "beauty" (cat-1) записана как is_primary=True
@@ -1002,15 +982,12 @@ class TestMatchCategories:
         }
 
         mock_db = MagicMock()
-        upsert_mock = MagicMock()
-        upsert_mock.execute.return_value = MagicMock()
-        mock_db.table.return_value.upsert.return_value = upsert_mock
 
         await match_categories(mock_db, "blog-1", insights, categories=categories)
 
-        # Batch upsert: 1 вызов с 2 записями
-        assert mock_db.table.return_value.upsert.call_count == 1
-        rows = mock_db.table.return_value.upsert.call_args[0][0]
+        # delete + insert: 2 записи
+        assert mock_db.table.return_value.insert.call_count == 1
+        rows = mock_db.table.return_value.insert.call_args[0][0]
         assert len(rows) == 2
         # Первый — primary
         assert rows[0]["category_id"] == "cat-1"
@@ -1040,14 +1017,10 @@ class TestMatchCategoriesEdge:
         ]
         mock_db.table.return_value.select.return_value.execute.return_value = cat_mock
 
-        upsert_mock = MagicMock()
-        upsert_mock.execute.return_value = MagicMock()
-        mock_db.table.return_value.upsert.return_value = upsert_mock
-
         await match_categories(mock_db, "blog-1", insights)
 
-        # beauty найдена по code, upsert вызван один раз
-        assert mock_db.table.return_value.upsert.call_count == 1
+        # beauty найдена по code, insert вызван один раз
+        assert mock_db.table.return_value.insert.call_count == 1
 
     @pytest.mark.asyncio
     async def test_empty_string_primary_topic(self) -> None:
@@ -1078,7 +1051,7 @@ class TestMatchCategoriesEdge:
 
         await match_categories(mock_db, "blog-1", insights)
 
-        mock_db.table.return_value.upsert.assert_not_called()
+        mock_db.table.return_value.insert.assert_not_called()
 
 
 class TestMatchTags:
@@ -1086,7 +1059,7 @@ class TestMatchTags:
 
     @pytest.mark.asyncio
     async def test_matches_known_tags(self) -> None:
-        """Теги из справочника -> upsert в blog_tags."""
+        """Теги из справочника -> delete + insert в blog_tags."""
         from src.ai.batch import match_tags
 
         insights = AIInsights()
@@ -1100,15 +1073,13 @@ class TestMatchTags:
         }
 
         mock_db = MagicMock()
-        upsert_mock = MagicMock()
-        upsert_mock.execute.return_value = MagicMock()
-        mock_db.table.return_value.upsert.return_value = upsert_mock
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
-        # Batch upsert: 1 вызов с 3 записями
-        assert mock_db.table.return_value.upsert.call_count == 1
-        rows = mock_db.table.return_value.upsert.call_args[0][0]
+        # delete старых + insert новых: 3 записи
+        assert mock_db.table.return_value.delete.call_count == 1
+        assert mock_db.table.return_value.insert.call_count == 1
+        rows = mock_db.table.return_value.insert.call_args[0][0]
         assert len(rows) == 3
 
     @pytest.mark.asyncio
@@ -1122,13 +1093,12 @@ class TestMatchTags:
         tags_cache = {"видео-контент": "tag-1"}
 
         mock_db = MagicMock()
-        upsert_mock = MagicMock()
-        upsert_mock.execute.return_value = MagicMock()
-        mock_db.table.return_value.upsert.return_value = upsert_mock
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
-        assert mock_db.table.return_value.upsert.call_count == 1
+        # Только 1 известный тег → delete + insert
+        assert mock_db.table.return_value.delete.call_count == 1
+        assert mock_db.table.return_value.insert.call_count == 1
 
     @pytest.mark.asyncio
     async def test_empty_tags(self) -> None:
@@ -1156,10 +1126,6 @@ class TestMatchTags:
         tags_mock = MagicMock()
         tags_mock.data = [{"id": "tag-1", "name": "видео-контент"}]
         mock_db.table.return_value.select.return_value.execute.return_value = tags_mock
-        # upsert
-        upsert_mock = MagicMock()
-        upsert_mock.execute.return_value = MagicMock()
-        mock_db.table.return_value.upsert.return_value = upsert_mock
 
         await match_tags(mock_db, "blog-1", insights, tags=None)
 
@@ -1177,10 +1143,9 @@ class TestMatchTags:
         tags_cache = {"видео-контент": "tag-1"}
 
         mock_db = MagicMock()
-        upsert_mock = MagicMock()
-        upsert_mock.execute.return_value = MagicMock()
-        mock_db.table.return_value.upsert.return_value = upsert_mock
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
-        assert mock_db.table.return_value.upsert.call_count == 1
+        # delete + insert
+        assert mock_db.table.return_value.delete.call_count == 1
+        assert mock_db.table.return_value.insert.call_count == 1

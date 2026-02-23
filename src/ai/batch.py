@@ -14,6 +14,7 @@ from src.ai.images import resolve_profile_images
 from src.ai.prompt import build_analysis_prompt
 from src.ai.schemas import AIInsights
 from src.config import Settings
+from src.database import run_in_thread
 from src.models.blog import ScrapedProfile
 
 # Статусы батча, при которых могут быть результаты в файлах
@@ -306,7 +307,7 @@ async def load_categories(db: Client) -> dict[str, str]:
     - key = code (для верхнеуровневых, AI возвращает код в primary_topic)
     - key = name_lower (для всех, подкатегории матчатся по имени)
     """
-    cat_result = await asyncio.to_thread(
+    cat_result = await run_in_thread(
         db.table("categories").select("id, code, name, parent_id").execute
     )
     categories: dict[str, str] = {}
@@ -347,37 +348,62 @@ async def match_categories(
     # Собираем все записи для batch upsert
     rows: list[dict[str, str | bool]] = []
     primary = insights.content.primary_topic.lower()
-    if primary in categories:
+    primary_category_id: str | None = categories.get(primary)
+    if primary_category_id:
         rows.append({
             "blog_id": blog_id,
-            "category_id": categories[primary],
+            "category_id": primary_category_id,
             "is_primary": True,
         })
 
-    # Secondary topics (пропускаем primary, чтобы не перезаписать is_primary=True)
+    # Secondary topics (пропускаем по category_id, чтобы не перезаписать is_primary=True)
+    seen_ids: set[str] = {primary_category_id} if primary_category_id else set()
     for topic in insights.content.secondary_topics:
         topic_lower = topic.lower()
-        if topic_lower == primary:
+        cat_id = categories.get(topic_lower)
+        if not cat_id or cat_id in seen_ids:
             continue
-        if topic_lower in categories:
-            rows.append({
-                "blog_id": blog_id,
-                "category_id": categories[topic_lower],
-                "is_primary": False,
-            })
+        seen_ids.add(cat_id)
+        rows.append({
+            "blog_id": blog_id,
+            "category_id": cat_id,
+            "is_primary": False,
+        })
 
     if rows:
-        await asyncio.to_thread(
-            db.table("blog_categories")
-            .upsert(rows, on_conflict="blog_id,category_id")
-            .execute
-        )
+        # Удаляем старые категории перед вставкой —
+        # partial unique index blog_categories_one_primary не позволяет
+        # upsert новой primary категории при существующей старой.
+        # DELETE + INSERT — два HTTP-запроса (не атомарно), поэтому
+        # при constraint violation ретраим один раз.
+        for attempt in range(2):
+            await run_in_thread(
+                db.table("blog_categories")
+                .delete()
+                .eq("blog_id", blog_id)
+                .execute
+            )
+            try:
+                await run_in_thread(
+                    db.table("blog_categories")
+                    .insert(rows)
+                    .execute
+                )
+                break
+            except Exception as e:
+                if attempt == 0 and "23505" in str(e):
+                    logger.warning(
+                        f"[match_categories] Constraint violation для blog {blog_id}, "
+                        f"повторная попытка delete+insert"
+                    )
+                    continue
+                raise
 
 
 async def load_tags(db: Client) -> dict[str, str]:
-    """Загрузить все теги из БД. Возвращает {name_lower: tag_id}."""
-    result = await asyncio.to_thread(
-        db.table("tags").select("id, name").execute
+    """Загрузить активные теги из БД. Возвращает {name_lower: tag_id}."""
+    result = await run_in_thread(
+        db.table("tags").select("id, name").eq("status", "active").execute
     )
     tags: dict[str, str] = {}
     for t in result.data:
@@ -408,14 +434,26 @@ async def match_tags(
         tags = await load_tags(db)
 
     rows = []
+    seen_tag_ids: set[str] = set()
     for tag_name in insights.tags:
         tag_lower = tag_name.lower()
-        if tag_lower in tags:
-            rows.append({"blog_id": blog_id, "tag_id": tags[tag_lower]})
+        tag_id = tags.get(tag_lower)
+        if tag_id and tag_id not in seen_tag_ids:
+            seen_tag_ids.add(tag_id)
+            rows.append({"blog_id": blog_id, "tag_id": tag_id})
 
     if rows:
-        await asyncio.to_thread(
+        # Атомарная замена: delete + insert (вместо upsert, который падает
+        # с "ON CONFLICT DO UPDATE cannot affect row a second time" если
+        # разные имена тегов маппятся на один tag_id)
+        await run_in_thread(
             db.table("blog_tags")
-            .upsert(rows, on_conflict="blog_id,tag_id")
+            .delete()
+            .eq("blog_id", blog_id)
+            .execute
+        )
+        await run_in_thread(
+            db.table("blog_tags")
+            .insert(rows)
             .execute
         )

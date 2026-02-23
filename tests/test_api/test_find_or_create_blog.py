@@ -2,6 +2,7 @@
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
+from postgrest.exceptions import APIError as PostgrestAPIError
 
 
 class TestFindOrCreateBlog:
@@ -47,7 +48,10 @@ class TestFindOrCreateBlog:
             mock_run.side_effect = [
                 MagicMock(data=[]),  # blog не найден
                 MagicMock(data=[{"id": "person-1"}]),  # insert person
-                Exception("duplicate key"),  # insert blog — конфликт
+                PostgrestAPIError({  # insert blog — конфликт
+                    "message": "duplicate key", "code": "23505",
+                    "details": "", "hint": "",
+                }),
                 MagicMock(data=[{"id": "blog-concurrent"}]),  # повторный SELECT
             ]
 
@@ -57,7 +61,7 @@ class TestFindOrCreateBlog:
 
     @pytest.mark.asyncio
     async def test_race_condition_reraise_if_not_found(self) -> None:
-        """Race condition: INSERT падает, и повторный SELECT тоже пуст → reraise."""
+        """Race condition: INSERT падает (PostgrestAPIError), и повторный SELECT тоже пуст → reraise."""
         from src.api.app import _find_or_create_blog
 
         db = MagicMock()
@@ -65,11 +69,14 @@ class TestFindOrCreateBlog:
             mock_run.side_effect = [
                 MagicMock(data=[]),  # blog не найден
                 MagicMock(data=[{"id": "person-1"}]),  # insert person
-                Exception("unknown error"),  # insert blog — ошибка
+                PostgrestAPIError({  # insert blog — ошибка
+                    "message": "unknown error", "code": "23505",
+                    "details": "", "hint": "",
+                }),
                 MagicMock(data=[]),  # повторный SELECT — тоже пусто
             ]
 
-            with pytest.raises(Exception, match="unknown error"):
+            with pytest.raises(PostgrestAPIError):
                 await _find_or_create_blog(db, "broken_user")
 
     @pytest.mark.asyncio

@@ -470,8 +470,6 @@ class TestSafeHikerClient:
 
     def test_raises_insufficient_balance_on_402(self) -> None:
         """HTTP 402 → InsufficientBalanceError."""
-        from unittest.mock import PropertyMock
-
         from src.platforms.instagram.exceptions import InsufficientBalanceError
         from src.platforms.instagram.hiker_scraper import SafeHikerClient
 

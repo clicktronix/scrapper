@@ -63,7 +63,7 @@ async def poll_batches(db: Client, openai_client: AsyncOpenAI) -> None:
     # {blog_id: {"id": task_id, "attempts": N, "max_attempts": M}}
     # или при коллизиях blog_id:
     # {blog_id: [ {"id": ...}, {"id": ...} ]}
-    batches: dict[str, dict[str, dict[str, Any] | list[dict[str, Any]]]] = {}
+    batches: dict[str, dict[str, Any]] = {}
     for task in result.data:
         batch_id = (task.get("payload") or {}).get("batch_id")
         if batch_id:

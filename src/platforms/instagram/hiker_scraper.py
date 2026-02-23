@@ -1,10 +1,10 @@
 """Скрапинг Instagram-профилей через HikerAPI (SaaS-бэкенд)."""
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 from hikerapi import Client
-from hikerapi.base import BaseSyncClient
 from loguru import logger
 
 from src.config import Settings
@@ -73,9 +73,9 @@ def _hiker_media_to_post(media: dict[str, Any]) -> ScrapedPost:
 
     # Спонсоры
     sponsor_tags = media.get("sponsor_tags") or []
-    sponsor_usernames = [
-        s.get("username") for s in sponsor_tags
-        if isinstance(s, dict) and s.get("username")
+    sponsor_usernames: list[str] = [
+        s["username"] for s in sponsor_tags
+        if isinstance(s, dict) and isinstance(s.get("username"), str)
     ]
 
     # Локация
@@ -248,7 +248,7 @@ class SafeHikerClient(Client):
         data: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         headers: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    ) -> Any:
         if params:
             params = {k: v for k, v in params.items() if v}
         resp: httpx.Response = self._client.request(
@@ -296,8 +296,8 @@ class HikerInstagramScraper:
         """Полный скрапинг Instagram-профиля через HikerAPI."""
         logger.info(f"[HikerAPI] Scraping profile @{username}")
 
-        # 1. Информация о пользователе
-        response = self.cl.user_by_username_v2(username)
+        # 1. Информация о пользователе (sync → thread)
+        response = await asyncio.to_thread(self.cl.user_by_username_v2, username)
         user = response.get("user", {})
 
         if not user or not user.get("pk"):
@@ -309,19 +309,21 @@ class HikerInstagramScraper:
 
         user_id = str(user["pk"])
 
-        # 2. Медиа
-        result = self.cl.user_medias_chunk_v1(user_id)
+        # 2. Медиа (sync → thread)
+        result = await asyncio.to_thread(self.cl.user_medias_chunk_v1, user_id)
         raw_medias: list[dict[str, Any]] = result[0] if isinstance(result, list) and result else []
 
-        # 3. Хайлайты
-        raw_highlights = self.cl.user_highlights(user_id, amount=self.settings.highlights_to_fetch)
+        # 3. Хайлайты (sync → thread)
+        raw_highlights = await asyncio.to_thread(
+            self.cl.user_highlights, user_id, amount=self.settings.highlights_to_fetch
+        )
         highlights: list[ScrapedHighlight] = []
         for hl in raw_highlights[: self.settings.highlights_to_fetch]:
             try:
                 hl_pk = str(hl.get("pk", ""))
                 # highlight_by_id_v2 принимает pk без prefix 'highlight:'
                 hl_pk_clean = hl_pk.replace("highlight:", "")
-                detail = self.cl.highlight_by_id_v2(hl_pk_clean)
+                detail = await asyncio.to_thread(self.cl.highlight_by_id_v2, hl_pk_clean)
                 # Структура: response.reels.{highlight:pk}.items
                 reels_data = detail.get("response", {}).get("reels", {})
                 hl_items: list[dict[str, Any]] = []

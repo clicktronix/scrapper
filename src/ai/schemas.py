@@ -48,8 +48,8 @@ class ContentProfile(BaseModel):
     """Контент-профиль — тематика, язык, тон, формат."""
     model_config = ConfigDict(extra="forbid")
 
-    primary_topic: str | None = None  # на русском: "материнство", "фитнес"
-    secondary_topics: list[str] = Field(default_factory=list)  # на русском: ["путешествия", "красота"]
+    primary_topic: str | None = None  # код категории: "beauty", "fitness", "family"
+    secondary_topics: list[str] = Field(default_factory=list)  # названия подкатегорий: ["Макияж", "Уход за кожей"]
     content_language: list[str] = Field(default_factory=list)  # на русском: ["русский", "казахский"]
     content_tone: Literal[
         "positive", "neutral", "educational", "humor", "inspirational"

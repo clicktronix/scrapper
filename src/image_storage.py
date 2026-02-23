@@ -10,7 +10,11 @@ from src.database import run_in_thread
 IMAGES_BUCKET = "blog-images"
 DOWNLOAD_TIMEOUT = 15.0
 MAX_DOWNLOAD_SIZE = 10 * 1024 * 1024  # 10 МБ
-MAX_CONCURRENT_UPLOADS = 4  # Ограничение параллельных загрузок в Storage
+MAX_CONCURRENT_UPLOADS = 2  # Ограничение параллельных загрузок в Storage
+
+# Глобальный семафор — разделяется между всеми конкурентными задачами worker'а,
+# чтобы суммарное число одновременных загрузок не превышало лимит (Errno 35 EAGAIN)
+_upload_semaphore = asyncio.Semaphore(MAX_CONCURRENT_UPLOADS)
 
 
 def build_public_url(supabase_url: str, path: str) -> str:
@@ -50,19 +54,36 @@ async def download_image(url: str, client: httpx.AsyncClient) -> tuple[bytes, st
     return response.content, mime
 
 
+UPLOAD_MAX_RETRIES = 3
+UPLOAD_RETRY_DELAY = 1.0  # секунды между попытками
+
+
 async def upload_image(db: Client, path: str, data: bytes, content_type: str) -> bool:
-    """Загрузить файл в Supabase Storage (upsert). Вернуть True при успехе."""
-    try:
-        await run_in_thread(
-            db.storage.from_(IMAGES_BUCKET).upload,
-            path,
-            data,
-            {"content-type": content_type, "upsert": "true"},
-        )
-        return True
-    except Exception as e:
-        logger.error(f"[image_storage] Ошибка загрузки в Storage ({path}): {e}")
-        return False
+    """Загрузить файл в Supabase Storage (upsert) с retry при EAGAIN."""
+    for attempt in range(1, UPLOAD_MAX_RETRIES + 1):
+        try:
+            await run_in_thread(
+                db.storage.from_(IMAGES_BUCKET).upload,
+                path,
+                data,
+                {"content-type": content_type, "upsert": "true"},
+            )
+            return True
+        except OSError as e:
+            # Errno 35 (EAGAIN) — ресурс временно недоступен, ретраим
+            if e.errno == 35 and attempt < UPLOAD_MAX_RETRIES:
+                logger.warning(
+                    f"[image_storage] EAGAIN при загрузке ({path}), "
+                    f"попытка {attempt}/{UPLOAD_MAX_RETRIES}, жду {UPLOAD_RETRY_DELAY}с..."
+                )
+                await asyncio.sleep(UPLOAD_RETRY_DELAY * attempt)
+                continue
+            logger.error(f"[image_storage] Ошибка загрузки в Storage ({path}): {e}")
+            return False
+        except Exception as e:
+            logger.error(f"[image_storage] Ошибка загрузки в Storage ({path}): {e}")
+            return False
+    return False
 
 
 async def download_and_upload_image(
@@ -100,13 +121,11 @@ async def persist_profile_images(
     """
     # Метаинформация для сборки результата
     task_keys: list[tuple[str, str]] = []  # (type, platform_id)
-    # Семафор ограничивает параллельные загрузки в Storage (Errno 35 при перегрузке)
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT_UPLOADS)
 
     async def _throttled_upload(
         client: httpx.AsyncClient, cdn_url: str, storage_path: str,
     ) -> str | None:
-        async with semaphore:
+        async with _upload_semaphore:
             return await download_and_upload_image(db, client, cdn_url, storage_path, supabase_url)
 
     tasks: list[asyncio.Task] = []
@@ -138,7 +157,7 @@ async def persist_profile_images(
     post_urls: dict[str, str] = {}
 
     for (kind, platform_id), result in zip(task_keys, results):
-        if isinstance(result, Exception):
+        if isinstance(result, BaseException):
             logger.error(f"[image_storage] Ошибка при обработке {kind} {platform_id}: {result}")
             continue
         if result is None:

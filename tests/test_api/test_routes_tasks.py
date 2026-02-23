@@ -5,6 +5,10 @@ from fastapi.testclient import TestClient
 
 from tests.test_api.conftest import AUTH_HEADERS, make_app
 
+# Валидные UUID для тестов (UUID валидация в эндпоинтах)
+TASK_UUID = "00000000-0000-0000-0000-000000000001"
+TASK_UUID_2 = "00000000-0000-0000-0000-000000000002"
+
 
 class TestListTasks:
     """GET /api/tasks — список задач с фильтрами."""
@@ -93,7 +97,7 @@ class TestGetTask:
     def test_get_existing_task(self) -> None:
         app = make_app()
         task_row = {
-            "id": "task-1",
+            "id": TASK_UUID,
             "blog_id": "blog-1",
             "task_type": "full_scrape",
             "status": "done",
@@ -108,10 +112,10 @@ class TestGetTask:
         with patch("src.api.app.run_in_thread") as mock_run:
             mock_run.return_value = MagicMock(data=[task_row])
             client = TestClient(app)
-            resp = client.get("/api/tasks/task-1", headers=AUTH_HEADERS)
+            resp = client.get(f"/api/tasks/{TASK_UUID}", headers=AUTH_HEADERS)
 
         assert resp.status_code == 200
-        assert resp.json()["id"] == "task-1"
+        assert resp.json()["id"] == TASK_UUID
         assert resp.json()["status"] == "done"
 
     def test_get_nonexistent_task_returns_404(self) -> None:
@@ -119,7 +123,7 @@ class TestGetTask:
         with patch("src.api.app.run_in_thread") as mock_run:
             mock_run.return_value = MagicMock(data=[])
             client = TestClient(app)
-            resp = client.get("/api/tasks/nonexistent", headers=AUTH_HEADERS)
+            resp = client.get(f"/api/tasks/{TASK_UUID}", headers=AUTH_HEADERS)
 
         assert resp.status_code == 404
 
@@ -137,13 +141,13 @@ class TestRetryTask:
         app = make_app()
         with patch("src.api.app.run_in_thread") as mock_run:
             # Первый вызов — select задачи
-            mock_run.return_value = MagicMock(data=[{"id": "task-1", "status": "failed"}])
+            mock_run.return_value = MagicMock(data=[{"id": TASK_UUID, "status": "failed"}])
             client = TestClient(app)
-            resp = client.post("/api/tasks/task-1/retry", headers=AUTH_HEADERS)
+            resp = client.post(f"/api/tasks/{TASK_UUID}/retry", headers=AUTH_HEADERS)
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["task_id"] == "task-1"
+        assert data["task_id"] == TASK_UUID
         assert data["status"] == "retrying"
 
     def test_retry_nonexistent_task_returns_404(self) -> None:
@@ -151,34 +155,34 @@ class TestRetryTask:
         with patch("src.api.app.run_in_thread") as mock_run:
             mock_run.return_value = MagicMock(data=[])
             client = TestClient(app)
-            resp = client.post("/api/tasks/nonexistent/retry", headers=AUTH_HEADERS)
+            resp = client.post(f"/api/tasks/{TASK_UUID}/retry", headers=AUTH_HEADERS)
 
         assert resp.status_code == 404
 
     def test_retry_pending_task_returns_409(self) -> None:
         app = make_app()
         with patch("src.api.app.run_in_thread") as mock_run:
-            mock_run.return_value = MagicMock(data=[{"id": "task-1", "status": "pending"}])
+            mock_run.return_value = MagicMock(data=[{"id": TASK_UUID, "status": "pending"}])
             client = TestClient(app)
-            resp = client.post("/api/tasks/task-1/retry", headers=AUTH_HEADERS)
+            resp = client.post(f"/api/tasks/{TASK_UUID}/retry", headers=AUTH_HEADERS)
 
         assert resp.status_code == 409
 
     def test_retry_running_task_returns_409(self) -> None:
         app = make_app()
         with patch("src.api.app.run_in_thread") as mock_run:
-            mock_run.return_value = MagicMock(data=[{"id": "task-1", "status": "running"}])
+            mock_run.return_value = MagicMock(data=[{"id": TASK_UUID, "status": "running"}])
             client = TestClient(app)
-            resp = client.post("/api/tasks/task-1/retry", headers=AUTH_HEADERS)
+            resp = client.post(f"/api/tasks/{TASK_UUID}/retry", headers=AUTH_HEADERS)
 
         assert resp.status_code == 409
 
     def test_retry_done_task_returns_409(self) -> None:
         app = make_app()
         with patch("src.api.app.run_in_thread") as mock_run:
-            mock_run.return_value = MagicMock(data=[{"id": "task-1", "status": "done"}])
+            mock_run.return_value = MagicMock(data=[{"id": TASK_UUID, "status": "done"}])
             client = TestClient(app)
-            resp = client.post("/api/tasks/task-1/retry", headers=AUTH_HEADERS)
+            resp = client.post(f"/api/tasks/{TASK_UUID}/retry", headers=AUTH_HEADERS)
 
         assert resp.status_code == 409
 
