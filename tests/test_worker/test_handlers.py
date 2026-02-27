@@ -48,7 +48,7 @@ def _make_scraped_profile() -> ScrapedProfile:
         media_count=200,
         is_verified=False,
         is_business=True,
-        avg_er_posts=3.5,
+        avg_er=3.5,
         avg_er_reels=5.0,
         er_trend="stable",
         posts_per_week=2.5,
@@ -105,7 +105,7 @@ class TestHandleFullScrape:
         mock_persist.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_private_account(self) -> None:
+    async def test_private_account_sets_needs_review(self) -> None:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
@@ -125,9 +125,14 @@ class TestHandleFullScrape:
 
         await handle_full_scrape(mock_db, task, mock_scraper, _make_settings())
 
-        # Проверяем, что scrape_status обновился на 'private'
-        # И mark_task_done вызван (через db.table.update)
         mock_scraper.scrape_profile.assert_called_once()
+        # Проверяем scrape_status='private' и needs_review=True
+        update_calls = table_mock.update.call_args_list
+        status_updates = [
+            c[0][0] for c in update_calls if "scrape_status" in c[0][0]
+        ]
+        assert any(u.get("scrape_status") == "private" for u in status_updates)
+        assert any(u.get("needs_review") is True for u in status_updates)
 
     @pytest.mark.asyncio
     async def test_all_accounts_cooldown(self) -> None:
@@ -160,7 +165,7 @@ class TestHandleFullScrape:
         assert "pending" in statuses
 
     @pytest.mark.asyncio
-    async def test_user_not_found_sets_deleted(self) -> None:
+    async def test_user_not_found_sets_deleted_and_needs_review(self) -> None:
         from instagrapi.exceptions import UserNotFound
 
         from src.worker.handlers import handle_full_scrape
@@ -183,14 +188,13 @@ class TestHandleFullScrape:
         await handle_full_scrape(mock_db, task, mock_scraper, _make_settings())
 
         mock_scraper.scrape_profile.assert_called_once()
-        # Проверяем, что был вызван update со scrape_status='deleted'
+        # Проверяем, что был вызван update со scrape_status='deleted' и needs_review=True
         update_calls = table_mock.update.call_args_list
-        statuses = [
-            c[0][0].get("scrape_status")
-            for c in update_calls
-            if "scrape_status" in c[0][0]
+        status_updates = [
+            c[0][0] for c in update_calls if "scrape_status" in c[0][0]
         ]
-        assert "deleted" in statuses
+        assert any(u.get("scrape_status") == "deleted" for u in status_updates)
+        assert any(u.get("needs_review") is True for u in status_updates)
 
     @pytest.mark.asyncio
     async def test_blog_not_found(self) -> None:
@@ -246,6 +250,116 @@ class TestHandleFullScrape:
         ]
         assert "failed" in statuses
 
+    @pytest.mark.asyncio
+    async def test_hiker_api_error_non_retryable_sets_needs_review(self) -> None:
+        """HikerAPIError 404 → scrape_status='failed', needs_review=True."""
+        from src.platforms.instagram.exceptions import HikerAPIError
+        from src.worker.handlers import handle_full_scrape
+
+        task = _make_task("full_scrape")
+        mock_db = MagicMock()
+
+        blog_select_mock = MagicMock()
+        blog_select_mock.data = [{"username": "gone_blogger"}]
+
+        table_mock = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
+        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        mock_db.table.return_value = table_mock
+        mock_db.rpc.return_value.execute.return_value = MagicMock()
+
+        mock_scraper = AsyncMock()
+        mock_scraper.scrape_profile.side_effect = HikerAPIError(404, "Not Found")
+
+        await handle_full_scrape(mock_db, task, mock_scraper, _make_settings())
+
+        update_calls = table_mock.update.call_args_list
+        status_updates = [
+            c[0][0] for c in update_calls if "scrape_status" in c[0][0]
+        ]
+        assert any(u.get("scrape_status") == "failed" for u in status_updates)
+        assert any(u.get("needs_review") is True for u in status_updates)
+
+    @pytest.mark.asyncio
+    async def test_hiker_api_error_retryable_no_needs_review(self) -> None:
+        """HikerAPIError 429 → scrape_status='pending', needs_review не ставится."""
+        from src.platforms.instagram.exceptions import HikerAPIError
+        from src.worker.handlers import handle_full_scrape
+
+        task = _make_task("full_scrape")
+        mock_db = MagicMock()
+
+        blog_select_mock = MagicMock()
+        blog_select_mock.data = [{"username": "rate_limited_blogger"}]
+
+        table_mock = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
+        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        mock_db.table.return_value = table_mock
+        mock_db.rpc.return_value.execute.return_value = MagicMock()
+
+        mock_scraper = AsyncMock()
+        mock_scraper.scrape_profile.side_effect = HikerAPIError(429, "Rate limited")
+
+        await handle_full_scrape(mock_db, task, mock_scraper, _make_settings())
+
+        update_calls = table_mock.update.call_args_list
+        status_updates = [
+            c[0][0] for c in update_calls if "scrape_status" in c[0][0]
+        ]
+        assert any(u.get("scrape_status") == "pending" for u in status_updates)
+        # needs_review не должен ставиться при retryable ошибке
+        assert not any(u.get("needs_review") is True for u in status_updates)
+
+    @pytest.mark.asyncio
+    async def test_deleted_blog_skipped(self) -> None:
+        """Блог со статусом 'deleted' → задача пропускается."""
+        from src.worker.handlers import handle_full_scrape
+
+        task = _make_task("full_scrape")
+        mock_db = MagicMock()
+
+        blog_select_mock = MagicMock()
+        blog_select_mock.data = [{"username": "gone_user", "scrape_status": "deleted"}]
+
+        table_mock = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
+        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        mock_db.table.return_value = table_mock
+        mock_db.rpc.return_value.execute.return_value = MagicMock()
+
+        mock_scraper = AsyncMock()
+
+        await handle_full_scrape(mock_db, task, mock_scraper, _make_settings())
+
+        # Скрапинг не должен запускаться
+        mock_scraper.scrape_profile.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_deactivated_blog_skipped(self) -> None:
+        """Блог со статусом 'deactivated' → задача пропускается."""
+        from src.worker.handlers import handle_full_scrape
+
+        task = _make_task("full_scrape")
+        mock_db = MagicMock()
+
+        blog_select_mock = MagicMock()
+        blog_select_mock.data = [
+            {"username": "deactivated_user", "scrape_status": "deactivated"},
+        ]
+
+        table_mock = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
+        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        mock_db.table.return_value = table_mock
+        mock_db.rpc.return_value.execute.return_value = MagicMock()
+
+        mock_scraper = AsyncMock()
+
+        await handle_full_scrape(mock_db, task, mock_scraper, _make_settings())
+
+        # Скрапинг не должен запускаться
+        mock_scraper.scrape_profile.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_already_claimed_returns_early(self) -> None:
@@ -647,7 +761,7 @@ class TestHandleBatchResults:
         db = _mock_db_for_batch()
         mock_client = MagicMock()
         insights = AIInsights()
-        insights.confidence = 0.85
+        insights.confidence = 4
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
@@ -672,12 +786,12 @@ class TestHandleBatchResults:
             if "ai_insights" in c[0][0]
         ]
         assert len(ai_updates) == 1
-        assert ai_updates[0]["ai_confidence"] == 0.85
-        assert ai_updates[0]["scrape_status"] == "active"
+        assert ai_updates[0]["ai_confidence"] == 0.80
+        assert ai_updates[0]["scrape_status"] == "ai_analyzed"
 
     @pytest.mark.asyncio
     async def test_completed_with_refusal(self) -> None:
-        """Refusal (insights=None) → scrape_status=active без insights."""
+        """Refusal (insights=None) → scrape_status=ai_analyzed без insights."""
         from src.worker.handlers import handle_batch_results
 
         db = _mock_db_for_batch()
@@ -695,7 +809,7 @@ class TestHandleBatchResults:
         update_calls = db.table.return_value.update.call_args_list
         status_updates = [
             c[0][0] for c in update_calls
-            if c[0][0].get("scrape_status") == "active"
+            if c[0][0].get("scrape_status") == "ai_analyzed"
         ]
         assert len(status_updates) >= 1
         # При refusal не должно быть ai_insights
@@ -736,7 +850,7 @@ class TestHandleBatchResults:
         db = _mock_db_for_batch()
         mock_client = MagicMock()
         insights = AIInsights()
-        insights.confidence = 0.9
+        insights.confidence = 5
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
@@ -782,7 +896,7 @@ class TestHandleBatchResults:
 
         db = _mock_db_for_batch()
         mock_client = MagicMock()
-        insights = AIInsights(confidence=0.7)
+        insights = AIInsights(confidence=4)
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
@@ -806,7 +920,7 @@ class TestHandleBatchResults:
         update_calls = db.table.return_value.update.call_args_list
         active_updates = [
             c[0][0] for c in update_calls
-            if c[0][0].get("scrape_status") == "active"
+            if c[0][0].get("scrape_status") == "ai_analyzed"
         ]
         assert len(active_updates) == 2
 
@@ -880,7 +994,7 @@ class TestHandleBatchResults:
 
         db = _mock_db_for_batch()
         mock_client = MagicMock()
-        insights = AIInsights(confidence=0.8)
+        insights = AIInsights(confidence=4)
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
@@ -917,7 +1031,7 @@ class TestHandleBatchResultsEdge:
         mock_client = MagicMock()
 
         insights = AIInsights()
-        insights.content.primary_topic = "Beauty"
+        insights.content.primary_categories = ["Beauty"]
 
         task_ids_by_blog = {"blog-1": "task-1"}
 
@@ -1345,6 +1459,90 @@ class TestHandleAiAnalysis:
             # Должно быть 4 вызова run_in_thread: только батчевая загрузка
             assert mock_run.call_count == 4
             assert mock_failed.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_text_only_passed_to_submit_batch(self) -> None:
+        """Задача с payload.text_only=True → submit_batch получает text_only_ids."""
+        from src.worker.handlers import handle_ai_analysis
+
+        db = MagicMock()
+        db.rpc.return_value.execute.return_value = MagicMock()
+        task = _make_task("ai_analysis")
+        settings = MagicMock()
+        settings.batch_min_size = 1
+        mock_client = MagicMock()
+
+        now_iso = datetime.now(UTC).isoformat()
+        pending_data = MagicMock(
+            data=[{
+                "id": "t1", "blog_id": "b1", "created_at": now_iso,
+                "attempts": 1, "max_attempts": 3,
+                "payload": {"text_only": True},
+            }]
+        )
+        blog_data = MagicMock(data=[{
+            "id": "b1",
+            "username": "testblog", "platform_id": "123",
+            "bio": "Bio",
+            "followers_count": 1000, "following_count": 100, "media_count": 50,
+        }])
+        empty_data = MagicMock(data=[])
+
+        with (
+            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
+            patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
+            patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock),
+        ):
+            mock_run.side_effect = [pending_data, blog_data, empty_data, empty_data, MagicMock()]
+            mock_submit.return_value = "batch-new"
+            await handle_ai_analysis(db, task, mock_client, settings)
+
+            mock_submit.assert_called_once()
+            call_kwargs = mock_submit.call_args
+            assert call_kwargs.kwargs["text_only_ids"] == {"b1"}
+
+    @pytest.mark.asyncio
+    async def test_payload_batch_id_merges_with_text_only(self) -> None:
+        """batch_id сохраняется в payload не затирая text_only."""
+        from src.worker.handlers import handle_ai_analysis
+
+        db = MagicMock()
+        db.rpc.return_value.execute.return_value = MagicMock()
+        task = _make_task("ai_analysis")
+        settings = MagicMock()
+        settings.batch_min_size = 1
+        mock_client = MagicMock()
+
+        now_iso = datetime.now(UTC).isoformat()
+        pending_data = MagicMock(
+            data=[{
+                "id": "t1", "blog_id": "b1", "created_at": now_iso,
+                "attempts": 0, "max_attempts": 3,
+                "payload": {"text_only": True},
+            }]
+        )
+        blog_data = MagicMock(data=[{
+            "id": "b1",
+            "username": "testblog", "platform_id": "123",
+            "bio": "Bio",
+            "followers_count": 1000, "following_count": 100, "media_count": 50,
+        }])
+        empty_data = MagicMock(data=[])
+
+        with (
+            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
+            patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
+            patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock),
+        ):
+            mock_run.side_effect = [pending_data, blog_data, empty_data, empty_data, MagicMock()]
+            mock_submit.return_value = "batch-new"
+            await handle_ai_analysis(db, task, mock_client, settings)
+
+            # Проверяем что update вызван с правильным payload (мержим text_only + batch_id)
+            update_chain = db.table("scrape_tasks").update
+            saved_payload = update_chain.call_args[0][0]["payload"]
+            assert saved_payload["text_only"] is True
+            assert saved_payload["batch_id"] == "batch-new"
 
 
 class TestHandleDiscoverEdge:
@@ -1932,6 +2130,41 @@ class TestLoadProfilesBioLinksCompat:
         _, profile = profiles[0]
         assert profile.bio_links == []
 
+    async def test_top_comments_are_loaded_for_batch_prompt(self) -> None:
+        """top_comments из blog_posts прокидываются в ScrapedPost для AI-анализа."""
+        from src.worker.handlers import _load_profiles_for_batch
+
+        db = MagicMock()
+        pending_tasks = [{"id": "t1", "blog_id": "b1", "attempts": 0, "max_attempts": 3}]
+
+        blogs_result = MagicMock(data=[{
+            "id": "b1", "username": "test", "platform_id": "123",
+            "bio": "Bio",
+            "followers_count": 1000, "following_count": 100, "media_count": 50,
+            "bio_links": [],
+        }])
+        posts_result = MagicMock(data=[{
+            "blog_id": "b1",
+            "platform_id": "p1",
+            "media_type": 1,
+            "taken_at": "2026-01-01T12:00:00+00:00",
+            "caption_text": "Post",
+            "top_comments": [
+                {"username": "user_1", "text": "Great!"},
+                {"username": "user_2", "text": "Love this"},
+            ],
+        }])
+        empty_data = MagicMock(data=[])
+
+        with patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run:
+            mock_run.side_effect = [blogs_result, posts_result, empty_data]
+            profiles, _, _ = await _load_profiles_for_batch(db, pending_tasks)
+
+        _, profile = profiles[0]
+        assert len(profile.medias) == 1
+        assert len(profile.medias[0].top_comments) == 2
+        assert profile.medias[0].top_comments[0].username == "user_1"
+
 
 class TestHandleDiscoverNewFields:
     """Тесты новых полей в handle_discover."""
@@ -2388,7 +2621,7 @@ class TestHandleBatchResultsTagsAndEmbedding:
         db = _mock_db_for_batch()
         mock_client = MagicMock()
         insights = AIInsights()
-        insights.confidence = 0.85
+        insights.confidence = 4
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
@@ -2415,7 +2648,7 @@ class TestHandleBatchResultsTagsAndEmbedding:
         db = _mock_db_for_batch()
         mock_client = MagicMock()
         insights = AIInsights()
-        insights.confidence = 0.9
+        insights.confidence = 5
 
         fake_vector = [0.1] * 1536
 
@@ -2491,7 +2724,7 @@ class TestHandleBatchResultsTagsAndEmbedding:
         db = MagicMock()
         mock_client = MagicMock()
         insights = AIInsights()
-        insights.content.primary_topic = "Beauty"
+        insights.content.primary_categories = ["Beauty"]
 
         task_ids_by_blog = {"blog-1": "task-1"}
 
@@ -2545,8 +2778,8 @@ class TestHandleBatchResultsTagsAndEmbedding:
             mock_done.assert_called_once_with(db, "task-1")
 
     @pytest.mark.asyncio
-    async def test_batch_results_refusal_skips_tags_and_embedding(self) -> None:
-        """При refusal (insights=None) match_tags и embedding не вызываются."""
+    async def test_batch_results_api_error_skips_tags_and_embedding(self) -> None:
+        """При API error (insights=None) match_tags и embedding не вызываются."""
         from src.worker.handlers import handle_batch_results
 
         db = _mock_db_for_batch()
@@ -2566,7 +2799,199 @@ class TestHandleBatchResultsTagsAndEmbedding:
                 db, mock_client, "batch-1", {"blog-1": "task-1"}
             )
 
-            # При refusal ни категории, ни теги, ни embedding не вызываются
+            # При API error ни категории, ни теги, ни embedding не вызываются
             mock_cat.assert_not_called()
             mock_tags.assert_not_called()
             mock_embed.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_batch_results_refusal_creates_text_only_retry(self) -> None:
+        """При refusal tuple создаётся retry задача с text_only=True."""
+        from src.worker.handlers import handle_batch_results
+
+        db = _mock_db_for_batch()
+        mock_client = MagicMock()
+
+        with (
+            patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
+            patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
+        ):
+            # current_by_id запрос (scrape_status != ai_refused)
+            mock_run.return_value = MagicMock(data=[
+                {"id": "blog-1", "city": None, "content_language": None,
+                 "audience_gender": None, "scrape_status": "scraped"},
+            ])
+            mock_poll.return_value = {
+                "status": "completed",
+                "results": {"blog-1": ("refusal", "Content policy violation")},
+            }
+
+            await handle_batch_results(
+                db, mock_client, "batch-1", {"blog-1": "task-1"}
+            )
+
+            # Должна создаться retry задача с text_only=True
+            mock_create.assert_called_once()
+            call_kwargs = mock_create.call_args
+            assert call_kwargs[1].get("payload") == {"text_only": True}
+
+    @pytest.mark.asyncio
+    async def test_batch_results_double_refusal_no_retry(self) -> None:
+        """Повторный refusal (ai_refused) — не создаёт retry."""
+        from src.worker.handlers import handle_batch_results
+
+        db = _mock_db_for_batch()
+        mock_client = MagicMock()
+
+        with (
+            patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
+            patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
+        ):
+            # current_by_id: уже ai_refused
+            mock_run.return_value = MagicMock(data=[
+                {"id": "blog-1", "city": None, "content_language": None,
+                 "audience_gender": None, "scrape_status": "ai_refused"},
+            ])
+            mock_poll.return_value = {
+                "status": "completed",
+                "results": {"blog-1": ("refusal", "Content policy violation again")},
+            }
+
+            await handle_batch_results(
+                db, mock_client, "batch-1", {"blog-1": "task-1"}
+            )
+
+            # Повторный refusal — retry не создаётся
+            mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_per_blog_error_does_not_kill_batch(self) -> None:
+        """Ошибка при обработке одного блога не блокирует остальные."""
+        from src.worker.handlers import handle_batch_results
+
+        db = _mock_db_for_batch()
+        mock_client = MagicMock()
+        insights_ok = AIInsights()
+
+        with (
+            patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.match_categories", new_callable=AsyncMock,
+                  return_value={"total": 0, "matched": 0, "unmatched": 0}),
+            patch("src.worker.handlers.match_tags", new_callable=AsyncMock,
+                  return_value={"total": 0, "matched": 0, "unmatched": 0}),
+            patch("src.worker.handlers.generate_embedding", new_callable=AsyncMock, return_value=None),
+            patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock) as mock_done,
+            patch("src.worker.handlers.mark_task_failed", new_callable=AsyncMock) as mock_fail,
+        ):
+            mock_run.return_value = MagicMock(data=[
+                {"id": "blog-bad", "city": None, "content_language": None,
+                 "audience_gender": None, "scrape_status": "active"},
+                {"id": "blog-ok", "city": None, "content_language": None,
+                 "audience_gender": None, "scrape_status": "active"},
+            ])
+            # blog-bad вызовет ошибку при update, blog-ok обработается нормально
+            call_count = 0
+
+            async def _side_effect_run(func, *args, **kwargs):
+                nonlocal call_count
+                call_count += 1
+                # Первый вызов — SELECT blogs, второй и далее — UPDATE
+                if call_count == 1:
+                    return MagicMock(data=[
+                        {"id": "blog-bad", "city": None, "content_language": None,
+                         "audience_gender": None, "scrape_status": "active"},
+                        {"id": "blog-ok", "city": None, "content_language": None,
+                         "audience_gender": None, "scrape_status": "active"},
+                    ])
+                if call_count == 2:
+                    # blog-bad: update падает
+                    raise Exception("\\u0000 cannot be converted to text")
+                return MagicMock(data=[])
+
+            mock_run.side_effect = _side_effect_run
+
+            mock_poll.return_value = {
+                "status": "completed",
+                "results": {
+                    "blog-bad": insights_ok,
+                    "blog-ok": insights_ok,
+                },
+            }
+
+            await handle_batch_results(
+                db, mock_client, "batch-1",
+                {
+                    "blog-bad": {"id": "task-bad", "attempts": 1, "max_attempts": 3},
+                    "blog-ok": {"id": "task-ok", "attempts": 1, "max_attempts": 3},
+                },
+            )
+
+            # blog-bad → mark_task_failed с retry
+            mock_fail.assert_called_once()
+            fail_args = mock_fail.call_args
+            assert fail_args[0][1] == "task-bad"
+            assert fail_args.kwargs.get("retry") is True
+
+            # blog-ok → mark_task_done (обработан несмотря на падение blog-bad)
+            mock_done.assert_called_once()
+            done_args = mock_done.call_args[0]
+            assert done_args[1] == "task-ok"
+
+
+class TestExtractBlogFieldsCityValidation:
+    """Тесты валидации города в _extract_blog_fields."""
+
+    def test_skips_garbage_city(self) -> None:
+        """city '14% Казахстан' → не попадает в fields."""
+        from src.worker.handlers import _extract_blog_fields
+
+        insights = AIInsights()
+        insights.blogger_profile.city = "14% Казахстан"
+
+        fields = _extract_blog_fields(insights)
+
+        assert "city" not in fields
+
+    def test_skips_country_name(self) -> None:
+        """city 'Казахстан' → не попадает в fields."""
+        from src.worker.handlers import _extract_blog_fields
+
+        insights = AIInsights()
+        insights.blogger_profile.city = "Казахстан"
+
+        fields = _extract_blog_fields(insights)
+
+        assert "city" not in fields
+
+    def test_valid_city_included(self) -> None:
+        """city 'Алматы' → попадает в fields."""
+        from src.worker.handlers import _extract_blog_fields
+
+        insights = AIInsights()
+        insights.blogger_profile.city = "Алматы"
+
+        fields = _extract_blog_fields(insights)
+
+        assert fields["city"] == "Алматы"
+
+    def test_none_city_not_included(self) -> None:
+        """city None → не попадает в fields."""
+        from src.worker.handlers import _extract_blog_fields
+
+        insights = AIInsights()
+        insights.blogger_profile.city = None
+
+        fields = _extract_blog_fields(insights)
+
+        assert "city" not in fields

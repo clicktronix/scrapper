@@ -12,19 +12,13 @@ def build_embedding_text(insights: AIInsights) -> str:
     parts: list[str] = []
 
     # Краткое описание
-    if insights.short_label:
-        label = insights.short_label
-        if insights.short_summary:
-            parts.append(f"{label}. {insights.short_summary}")
-        else:
-            parts.append(label)
-    elif insights.short_summary:
+    if insights.short_summary:
         parts.append(insights.short_summary)
 
     # Категория и подкатегории
     profile_parts: list[str] = []
-    if insights.content.primary_topic:
-        profile_parts.append(f"Категория: {insights.content.primary_topic}")
+    if insights.content.primary_categories:
+        profile_parts.append(f"Категории: {', '.join(insights.content.primary_categories)}")
     if insights.content.secondary_topics:
         profile_parts.append(f"Подкатегории: {', '.join(insights.content.secondary_topics)}")
     bp = insights.blogger_profile
@@ -52,8 +46,8 @@ def build_embedding_text(insights: AIInsights) -> str:
     # Аудитория
     aud = insights.audience_inference
     aud_parts: list[str] = []
-    if aud.estimated_audience_gender:
-        aud_parts.append(aud.estimated_audience_gender)
+    if aud.audience_male_pct is not None and aud.audience_female_pct is not None:
+        aud_parts.append(f"муж. {aud.audience_male_pct}%, жен. {aud.audience_female_pct}%")
     if aud.estimated_audience_age:
         aud_parts.append(aud.estimated_audience_age)
     if aud.estimated_audience_geo:
@@ -71,6 +65,23 @@ def build_embedding_text(insights: AIInsights) -> str:
         parts.append(f"Не подходит: {', '.join(mv.not_suitable_for)}.")
     if insights.commercial.detected_brand_categories:
         parts.append(f"Рекламирует: {', '.join(insights.commercial.detected_brand_categories)}.")
+
+    # Качественные характеристики
+    quality_parts: list[str] = []
+    if insights.audience_inference.engagement_quality:
+        eq_map = {"organic": "органическая", "mixed": "смешанная", "suspicious": "подозрительная"}
+        eq = insights.audience_inference.engagement_quality
+        quality_parts.append(f"вовлечённость: {eq_map.get(eq, eq)}")
+    if insights.marketing_value.brand_safety_score:
+        quality_parts.append(f"безопасность бренда: {insights.marketing_value.brand_safety_score}/5")
+    if insights.lifestyle.lifestyle_level:
+        quality_parts.append(f"уровень жизни: {insights.lifestyle.lifestyle_level}")
+    if insights.content.content_quality:
+        quality_parts.append(f"качество контента: {insights.content.content_quality}")
+    if insights.marketing_value.collaboration_risk:
+        quality_parts.append(f"риск коллаборации: {insights.marketing_value.collaboration_risk}")
+    if quality_parts:
+        parts.append(f"Характеристики: {', '.join(quality_parts)}.")
 
     return "\n".join(parts) if parts else "блогер"
 

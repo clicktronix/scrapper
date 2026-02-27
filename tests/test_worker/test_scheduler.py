@@ -18,7 +18,7 @@ class TestScheduleUpdates:
         # Вернуть 2 устаревших блога
         result_mock = MagicMock()
         result_mock.data = [{"id": "blog-1"}, {"id": "blog-2"}]
-        chain = mock_db.table.return_value.select.return_value.eq.return_value
+        chain = mock_db.table.return_value.select.return_value.in_.return_value
         chain.or_.return_value.order.return_value.limit.return_value.execute.return_value = result_mock
 
         # Мок create_task_if_not_exists
@@ -44,7 +44,7 @@ class TestScheduleUpdates:
 
         result_mock = MagicMock()
         result_mock.data = []
-        chain = mock_db.table.return_value.select.return_value.eq.return_value
+        chain = mock_db.table.return_value.select.return_value.in_.return_value
         chain.or_.return_value.order.return_value.limit.return_value.execute.return_value = result_mock
 
         with patch(
@@ -70,7 +70,7 @@ class TestScheduleUpdatesRescrape:
 
         result_mock = MagicMock()
         result_mock.data = []
-        chain = mock_db.table.return_value.select.return_value.eq.return_value
+        chain = mock_db.table.return_value.select.return_value.in_.return_value
         chain.or_.return_value.order.return_value.limit.return_value.execute.return_value = result_mock
 
         with patch(
@@ -93,7 +93,7 @@ class TestScheduleUpdatesRescrape:
 
         result_mock = MagicMock()
         result_mock.data = []
-        chain = mock_db.table.return_value.select.return_value.eq.return_value
+        chain = mock_db.table.return_value.select.return_value.in_.return_value
         chain.or_.return_value.order.return_value.limit.return_value.execute.return_value = result_mock
 
         with patch(
@@ -120,7 +120,7 @@ class TestScheduleUpdatesEdge:
 
         result_mock = MagicMock()
         result_mock.data = [{"id": "blog-1"}, {"id": "blog-2"}]
-        chain = mock_db.table.return_value.select.return_value.eq.return_value
+        chain = mock_db.table.return_value.select.return_value.in_.return_value
         chain.or_.return_value.order.return_value.limit.return_value.execute.return_value = result_mock
 
         with patch(
@@ -143,7 +143,7 @@ class TestScheduleUpdatesEdge:
 
         result_mock = MagicMock()
         result_mock.data = []
-        chain = mock_db.table.return_value.select.return_value.eq.return_value
+        chain = mock_db.table.return_value.select.return_value.in_.return_value
         chain.or_.return_value.order.return_value.limit.return_value.execute.return_value = result_mock
 
         with patch(
@@ -182,7 +182,7 @@ class TestRetryStaleBatchesEdge:
 
             mock_fail.assert_called_once_with(
                 mock_db, "t1", 3, 5,
-                "Batch not completed in 26h", retry=True,
+                "Batch not completed in 4h", retry=True,
             )
 
 
@@ -203,6 +203,9 @@ class TestCreateScheduler:
         assert "schedule_updates" in job_ids
         assert "poll_batches" in job_ids
         assert "retry_stale_batches" in job_ids
+        assert "retry_missing_embeddings" in job_ids
+        assert "retry_taxonomy_mappings" in job_ids
+        assert "audit_taxonomy_drift" in job_ids
         assert "cleanup_old_images" in job_ids
     def test_no_poll_jobs_without_openai(self) -> None:
         from src.worker.scheduler import create_scheduler
@@ -216,6 +219,9 @@ class TestCreateScheduler:
         assert "schedule_updates" in job_ids
         assert "poll_batches" not in job_ids
         assert "retry_stale_batches" not in job_ids
+        assert "retry_missing_embeddings" not in job_ids
+        assert "retry_taxonomy_mappings" not in job_ids
+        assert "audit_taxonomy_drift" not in job_ids
 
     def test_misfire_grace_time_is_none(self) -> None:
         """misfire_grace_time=None — job'ы не пропускаются при задержке."""
@@ -414,11 +420,11 @@ class TestRetryStaleBatches:
             await retry_stale_batches(mock_db, mock_openai, settings)
 
             assert mock_fail.call_count == 2
-            # Проверяем, что передаётся retry=True и сообщение о 26ч
+            # Проверяем, что передаётся retry=True и сообщение о 4ч
             for call_obj in mock_fail.call_args_list:
                 assert call_obj.kwargs.get("retry") is True
                 # Позиционные аргументы: db, task_id, attempts, max_attempts, error
-                assert "26h" in call_obj.args[4]
+                assert "4h" in call_obj.args[4]
 
 
 class TestRecoverTasks:
@@ -498,3 +504,115 @@ class TestCleanupOldImages:
             await cleanup_old_images(mock_db, settings)
 
             assert mock_delete.call_count == 2
+
+
+class TestRetryMissingEmbeddings:
+    """Тесты retry_missing_embeddings."""
+
+    @pytest.mark.asyncio
+    async def test_regenerates_embedding_for_blog_without_vector(self) -> None:
+        from src.ai.schemas import AIInsights
+        from src.worker.scheduler import retry_missing_embeddings
+
+        mock_db = MagicMock()
+        mock_openai = MagicMock()
+
+        insights_data = AIInsights(
+            short_summary="Тестовый блогер",
+            tags=["видео-контент", "reels", "юмор"],
+        ).model_dump()
+
+        with (
+            patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run,
+            patch("src.worker.scheduler.generate_embedding", new_callable=AsyncMock) as mock_embed,
+        ):
+            mock_run.side_effect = [
+                # Первый вызов — запрос блогов без embedding
+                MagicMock(data=[{"id": "blog-1", "ai_insights": insights_data}]),
+                # Второй вызов — update embedding
+                MagicMock(),
+            ]
+            mock_embed.return_value = [0.1] * 1536
+
+            await retry_missing_embeddings(mock_db, mock_openai)
+
+            mock_embed.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_no_blogs_without_embedding(self) -> None:
+        from src.worker.scheduler import retry_missing_embeddings
+
+        mock_db = MagicMock()
+        mock_openai = MagicMock()
+
+        with patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = MagicMock(data=[])
+
+            await retry_missing_embeddings(mock_db, mock_openai)
+            # Только один вызов (запрос блогов), без update
+            mock_run.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_error_in_one_blog_does_not_crash(self) -> None:
+        from src.ai.schemas import AIInsights
+        from src.worker.scheduler import retry_missing_embeddings
+
+        mock_db = MagicMock()
+        mock_openai = MagicMock()
+
+        with (
+            patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run,
+            patch("src.worker.scheduler.generate_embedding", new_callable=AsyncMock) as mock_embed,
+        ):
+            mock_run.return_value = MagicMock(data=[
+                {"id": "blog-1", "ai_insights": {"invalid": True}},
+                {"id": "blog-2", "ai_insights": AIInsights(short_summary="OK").model_dump()},
+            ])
+            mock_embed.return_value = [0.1] * 1536
+
+            # Не должно падать
+            await retry_missing_embeddings(mock_db, mock_openai)
+
+
+class TestRetryTaxonomyMappings:
+    """Тесты retry_taxonomy_mappings."""
+
+    @pytest.mark.asyncio
+    async def test_retry_taxonomy_calls_matchers(self) -> None:
+        from src.worker.scheduler import retry_taxonomy_mappings
+
+        mock_db = MagicMock()
+        blogs_result = MagicMock(data=[{
+            "id": "blog-1",
+            "ai_insights": {"tags": ["видео-контент", "reels", "юмор"]},
+        }])
+
+        with (
+            patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run,
+            patch("src.worker.scheduler.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.scheduler.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.scheduler.match_categories", new_callable=AsyncMock) as mock_match_categories,
+            patch("src.worker.scheduler.match_tags", new_callable=AsyncMock) as mock_match_tags,
+        ):
+            mock_run.return_value = blogs_result
+            await retry_taxonomy_mappings(mock_db)
+
+            mock_match_categories.assert_called_once()
+            mock_match_tags.assert_called_once()
+
+
+class TestAuditTaxonomyDrift:
+    """Тесты audit_taxonomy_drift."""
+
+    @pytest.mark.asyncio
+    async def test_audit_logs_when_mismatch_found(self) -> None:
+        from src.worker.scheduler import audit_taxonomy_drift
+
+        mock_db = MagicMock()
+        with (
+            patch("src.worker.scheduler.load_categories", new_callable=AsyncMock, return_value={"beauty": "cat-1"}),
+            patch("src.worker.scheduler.load_tags", new_callable=AsyncMock, return_value={"видео-контент": "tag-1"}),
+            patch("src.worker.scheduler.logger") as mock_logger,
+        ):
+            await audit_taxonomy_drift(mock_db)
+            assert mock_logger.warning.call_count >= 1

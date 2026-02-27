@@ -10,6 +10,7 @@ from supabase import create_client
 
 from src.api.app import create_app
 from src.config import load_settings
+from src.log_sink import create_supabase_sink
 from src.platforms.base import BaseScraper
 from src.worker.loop import run_worker
 from src.worker.scheduler import create_scheduler
@@ -29,6 +30,14 @@ async def main() -> None:
 
     # Supabase
     db = create_client(settings.supabase_url, settings.supabase_service_key.get_secret_value())
+
+    # Персистить WARNING+ логи в Supabase
+    logger.add(
+        create_supabase_sink(db),
+        level="WARNING",
+        enqueue=True,
+        serialize=False,
+    )
 
     # OpenAI
     openai_client = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())

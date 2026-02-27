@@ -91,7 +91,7 @@ class TestScrapedProfile:
         assert p.follower_count == 0
         assert p.medias == []
         assert p.highlights == []
-        assert p.avg_er_posts is None
+        assert p.avg_er is None
 
     def test_profile_with_metrics(self) -> None:
         from src.models.blog import ScrapedProfile
@@ -100,7 +100,7 @@ class TestScrapedProfile:
             platform_id="user_2",
             username="blogger",
             follower_count=50000,
-            avg_er_posts=3.5,
+            avg_er=3.5,
             avg_er_reels=5.2,
             er_trend="growing",
             posts_per_week=2.5,

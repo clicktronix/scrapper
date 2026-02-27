@@ -5,6 +5,13 @@ from typing import Literal
 from pydantic import BaseModel
 
 
+class ScrapedComment(BaseModel):
+    """Комментарий к посту."""
+
+    username: str
+    text: str
+
+
 class ScrapedPost(BaseModel):
     """Пост или рилс из Instagram."""
 
@@ -34,6 +41,7 @@ class ScrapedPost(BaseModel):
     usertags: list[str] = []  # отмеченные на фото пользователи
     accessibility_caption: str | None = None  # автоописание от Instagram
     comments_disabled: bool = False  # комменты отключены
+    top_comments: list[ScrapedComment] = []  # топ комментариев для AI-анализа
     title: str | None = None  # заголовок Reels/IGTV
     carousel_media_count: int | None = None  # количество слайдов карусели
 
@@ -94,7 +102,7 @@ class ScrapedProfile(BaseModel):
     highlights: list[ScrapedHighlight] = []
 
     # Вычисленные метрики
-    avg_er_posts: float | None = None
+    avg_er: float | None = None
     avg_er_reels: float | None = None
     er_trend: Literal["growing", "stable", "declining"] | None = None
     posts_per_week: float | None = None

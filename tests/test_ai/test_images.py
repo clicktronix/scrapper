@@ -9,6 +9,7 @@ import pytest
 from PIL import Image
 
 from src.ai.images import (
+    DOWNLOAD_TIMEOUT,
     MAX_IMAGES,
     download_image_as_base64,
     resolve_profile_images,
@@ -36,7 +37,7 @@ class TestDownloadImageAsBase64:
         assert result is not None
         assert result.startswith("data:image/png;base64,")
         client.get.assert_called_once_with(
-            "https://example.com/img.png", timeout=10.0,
+            "https://example.com/img.png", timeout=DOWNLOAD_TIMEOUT,
         )
 
     @pytest.mark.asyncio
@@ -92,13 +93,36 @@ class TestDownloadImageAsBase64:
 
     @pytest.mark.asyncio
     async def test_download_timeout(self) -> None:
-        """Таймаут — возвращает None."""
+        """Таймаут после всех ретраев — возвращает None."""
         client = AsyncMock(spec=httpx.AsyncClient)
         client.get = AsyncMock(side_effect=httpx.ReadTimeout("timeout"))
 
         result = await download_image_as_base64("https://example.com/slow.jpg", client)
 
         assert result is None
+        # 1 начальная попытка + MAX_RETRIES ретраев
+        from src.ai.images import MAX_RETRIES
+        assert client.get.call_count == MAX_RETRIES + 1
+
+    @pytest.mark.asyncio
+    async def test_download_timeout_retry_success(self) -> None:
+        """Таймаут на первой попытке, успех на второй — возвращает data URI."""
+        mock_response = httpx.Response(
+            200,
+            content=b"\x89PNG\r\n\x1a\n",
+            headers={"content-type": "image/png"},
+            request=httpx.Request("GET", "https://example.com/img.png"),
+        )
+        client = AsyncMock(spec=httpx.AsyncClient)
+        client.get = AsyncMock(
+            side_effect=[httpx.ReadTimeout("timeout"), mock_response],
+        )
+
+        result = await download_image_as_base64("https://example.com/img.png", client)
+
+        assert result is not None
+        assert result.startswith("data:image/")
+        assert client.get.call_count == 2
 
     @pytest.mark.asyncio
     async def test_download_http_404(self) -> None:

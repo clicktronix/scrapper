@@ -13,7 +13,13 @@ from src.models.blog import ScrapedProfile
 MAX_IMAGES = 10
 
 # Таймаут на скачивание одного изображения
-DOWNLOAD_TIMEOUT = 10.0
+DOWNLOAD_TIMEOUT = 30.0
+
+# Количество повторных попыток при таймауте
+MAX_RETRIES = 3
+
+# Базовая задержка между ретраями (секунды), умножается на номер попытки
+RETRY_BASE_DELAY = 2.0
 
 # Максимальный размер изображения (5 МБ)
 MAX_IMAGE_SIZE = 5 * 1024 * 1024
@@ -63,22 +69,49 @@ def _optimize_image_for_llm(raw_image: bytes, original_mime: str, source_url: st
     return best_jpeg, "image/jpeg"
 
 
+async def _do_download(
+    url: str,
+    client: httpx.AsyncClient,
+    semaphore: asyncio.Semaphore | None = None,
+) -> httpx.Response:
+    """Выполнить HTTP GET с учётом семафора."""
+    if semaphore is not None:
+        async with semaphore:
+            response = await client.get(url, timeout=DOWNLOAD_TIMEOUT)
+            response.raise_for_status()
+            return response
+    response = await client.get(url, timeout=DOWNLOAD_TIMEOUT)
+    response.raise_for_status()
+    return response
+
+
 async def download_image_as_base64(
     url: str,
     client: httpx.AsyncClient,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> str | None:
     """Скачать изображение и вернуть data URI. None при ошибке."""
-    try:
-        response = await client.get(url, timeout=DOWNLOAD_TIMEOUT)
-        response.raise_for_status()
-    except httpx.TimeoutException:
-        logger.warning(f"[images] Таймаут при скачивании: {url}")
-        return None
-    except httpx.HTTPStatusError as e:
-        logger.warning(f"[images] HTTP {e.response.status_code} при скачивании: {url}")
-        return None
-    except httpx.HTTPError as e:
-        logger.warning(f"[images] Ошибка при скачивании {url}: {e}")
+    response: httpx.Response | None = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            response = await _do_download(url, client, semaphore)
+            break
+        except httpx.TimeoutException:
+            if attempt < MAX_RETRIES:
+                delay = RETRY_BASE_DELAY * (attempt + 1)
+                logger.debug(f"[images] Таймаут (попытка {attempt + 1}), ретрай через {delay}с: {url}")
+                await asyncio.sleep(delay)
+                continue
+            logger.warning(f"[images] Таймаут при скачивании ({MAX_RETRIES + 1} попыток): {url}")
+            return None
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"[images] HTTP {e.response.status_code} при скачивании: {url}")
+            return None
+        except httpx.HTTPError as e:
+            logger.warning(f"[images] Ошибка при скачивании {url}: {e}")
+            return None
+
+    if response is None:
         return None
 
     # Проверяем размер
@@ -124,10 +157,12 @@ def _collect_image_urls(profile: ScrapedProfile) -> list[str]:
 async def resolve_profile_images(
     profile: ScrapedProfile,
     client: httpx.AsyncClient | None = None,
+    semaphore: asyncio.Semaphore | None = None,
 ) -> dict[str, str]:
     """
     Скачать все изображения профиля параллельно.
     Возвращает {original_url: data_uri} для успешных скачиваний.
+    semaphore — ограничивает общее число конкурентных загрузок (при батче).
     """
     urls = _collect_image_urls(profile)
     if not urls:
@@ -139,7 +174,7 @@ async def resolve_profile_images(
         client = httpx.AsyncClient()
 
     try:
-        tasks = [download_image_as_base64(url, client) for url in urls]
+        tasks = [download_image_as_base64(url, client, semaphore=semaphore) for url in urls]
         results = await asyncio.gather(*tasks)
     finally:
         if own_client:

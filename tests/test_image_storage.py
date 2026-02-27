@@ -143,6 +143,15 @@ class TestUploadImage:
             assert call_args.args[3] == {"content-type": "image/jpeg", "upsert": "true"}
 
 
+class TestEagainDetection:
+    """Тесты распознавания EAGAIN-ошибок."""
+
+    def test_linux_errno_11_is_recognized(self) -> None:
+        from src.image_storage import _is_eagain
+
+        assert _is_eagain(OSError(11, "Resource temporarily unavailable"))
+
+
 class TestDownloadAndUploadImage:
     """Тесты download_and_upload_image."""
 

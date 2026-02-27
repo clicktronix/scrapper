@@ -88,8 +88,10 @@ class TestBuildAnalysisPrompt:
         image_parts = [p for p in content if p["type"] == "image_url"]
         # 1 avatar + 2 medias = 3
         assert len(image_parts) == 3
-        # Все с detail: "low"
-        assert all(p["image_url"]["detail"] == "low" for p in image_parts)
+        details = [p["image_url"]["detail"] for p in image_parts]
+        # Один самый ER-значимый пост отправляется как high, остальные low
+        assert details.count("high") == 1
+        assert details.count("low") == 2
 
     def test_includes_highlights(self) -> None:
         from src.ai.prompt import build_analysis_prompt
@@ -709,8 +711,9 @@ class TestBuildAnalysisPromptImageMap:
         assert urls[0] == "data:image/jpeg;base64,avatar_data"
         assert urls[1] == "data:image/jpeg;base64,post1_data"
         assert urls[2] == "data:image/jpeg;base64,reel1_data"
-        # detail остаётся "low"
-        assert all(p["image_url"]["detail"] == "low" for p in image_parts)
+        details = [p["image_url"]["detail"] for p in image_parts]
+        assert details.count("high") == 1
+        assert details.count("low") == 2
 
     def test_image_map_missing_url_skipped(self) -> None:
         """URL не в image_map → изображение пропускается."""
@@ -758,6 +761,44 @@ class TestBuildAnalysisPromptImageMap:
         assert urls[1] == "https://example.com/post1.jpg"
         assert urls[2] == "https://example.com/reel1.jpg"
 
+    def test_top_er_post_uses_high_detail(self) -> None:
+        """Только thumbnail самого ER-значимого поста отправляется как high."""
+        from src.ai.prompt import build_analysis_prompt
+        from src.models.blog import ScrapedPost, ScrapedProfile
+
+        profile = ScrapedProfile(
+            platform_id="12345",
+            username="er-priority",
+            profile_pic_url="https://example.com/avatar.jpg",
+            follower_count=10000,
+            medias=[
+                ScrapedPost(
+                    platform_id="p-low",
+                    media_type=1,
+                    like_count=50,
+                    comment_count=5,
+                    thumbnail_url="https://example.com/low.jpg",
+                    taken_at=datetime(2026, 1, 15, tzinfo=UTC),
+                ),
+                ScrapedPost(
+                    platform_id="p-high",
+                    media_type=1,
+                    like_count=500,
+                    comment_count=120,
+                    thumbnail_url="https://example.com/high.jpg",
+                    taken_at=datetime(2026, 1, 16, tzinfo=UTC),
+                ),
+            ],
+        )
+
+        messages = build_analysis_prompt(profile)
+        image_parts = [p for p in messages[1]["content"] if p["type"] == "image_url"]
+        detail_by_url = {p["image_url"]["url"]: p["image_url"]["detail"] for p in image_parts}
+
+        assert detail_by_url["https://example.com/high.jpg"] == "high"
+        assert detail_by_url["https://example.com/low.jpg"] == "low"
+        assert detail_by_url["https://example.com/avatar.jpg"] == "low"
+
 
 class TestPromptIncludesTaxonomy:
     """Тесты: промпт содержит справочник категорий и тегов."""
@@ -795,6 +836,164 @@ class TestPromptIncludesTaxonomy:
         assert "код" in lower or "code" in lower or "из списка" in lower
 
 
+class TestBuildAnalysisPromptComments:
+    """Тесты отображения комментариев в промпте."""
+
+    def test_post_with_comments_shows_comments(self) -> None:
+        """Пост с top_comments → строка Comments: [...] в тексте."""
+        from src.ai.prompt import build_analysis_prompt
+        from src.models.blog import ScrapedComment, ScrapedPost, ScrapedProfile
+
+        profile = ScrapedProfile(
+            platform_id="12345",
+            username="commtest",
+            follower_count=10000,
+            medias=[
+                ScrapedPost(
+                    platform_id="p1",
+                    media_type=1,
+                    like_count=500,
+                    comment_count=45,
+                    taken_at=datetime(2026, 1, 15, tzinfo=UTC),
+                    top_comments=[
+                        ScrapedComment(username="user1", text="Классный пост!"),
+                        ScrapedComment(username="user2", text="🔥🔥🔥"),
+                        ScrapedComment(username="user3", text="Где купить?"),
+                    ],
+                ),
+            ],
+        )
+        messages = build_analysis_prompt(profile)
+        text = messages[1]["content"][0]["text"]
+
+        assert "Comments: [" in text
+        assert "@user1: Классный пост!" in text
+        assert "@user2: 🔥🔥🔥" in text
+        assert "@user3: Где купить?" in text
+
+    def test_post_without_comments_no_comments_line(self) -> None:
+        """Пост без top_comments → нет строки Comments."""
+        from src.ai.prompt import build_analysis_prompt
+        from src.models.blog import ScrapedPost, ScrapedProfile
+
+        profile = ScrapedProfile(
+            platform_id="12345",
+            username="nocomm",
+            follower_count=10000,
+            medias=[
+                ScrapedPost(
+                    platform_id="p1",
+                    media_type=1,
+                    like_count=100,
+                    comment_count=10,
+                    taken_at=datetime(2026, 1, 15, tzinfo=UTC),
+                ),
+            ],
+        )
+        messages = build_analysis_prompt(profile)
+        text = messages[1]["content"][0]["text"]
+
+        assert "Comments:" not in text
+
+    def test_comments_text_truncated_to_100(self) -> None:
+        """Длинный текст комментария обрезается до 100 символов."""
+        from src.ai.prompt import build_analysis_prompt
+        from src.models.blog import ScrapedComment, ScrapedPost, ScrapedProfile
+
+        long_text = "А" * 200
+        profile = ScrapedProfile(
+            platform_id="12345",
+            username="longcomm",
+            follower_count=10000,
+            medias=[
+                ScrapedPost(
+                    platform_id="p1",
+                    media_type=1,
+                    like_count=100,
+                    comment_count=10,
+                    taken_at=datetime(2026, 1, 15, tzinfo=UTC),
+                    top_comments=[
+                        ScrapedComment(username="fan", text=long_text),
+                    ],
+                ),
+            ],
+        )
+        messages = build_analysis_prompt(profile)
+        text = messages[1]["content"][0]["text"]
+
+        # Текст комментария должен быть обрезан до 100 символов
+        assert "А" * 100 in text
+        assert "А" * 101 not in text
+
+    def test_comments_limited_to_10(self) -> None:
+        """В промпте отображается максимум 10 комментариев на пост."""
+        from src.ai.prompt import build_analysis_prompt
+        from src.models.blog import ScrapedComment, ScrapedPost, ScrapedProfile
+
+        comments = [
+            ScrapedComment(username=f"user{i}", text=f"Коммент {i}")
+            for i in range(15)
+        ]
+        profile = ScrapedProfile(
+            platform_id="12345",
+            username="manycomm",
+            follower_count=10000,
+            medias=[
+                ScrapedPost(
+                    platform_id="p1",
+                    media_type=1,
+                    like_count=100,
+                    comment_count=50,
+                    taken_at=datetime(2026, 1, 15, tzinfo=UTC),
+                    top_comments=comments,
+                ),
+            ],
+        )
+        messages = build_analysis_prompt(profile)
+        text = messages[1]["content"][0]["text"]
+
+        # user9 (10-й) должен быть, user10 (11-й) — нет
+        assert "@user9:" in text
+        assert "@user10:" not in text
+
+    def test_mixed_posts_with_and_without_comments(self) -> None:
+        """Смешанные посты: с комментариями и без — корректно отображаются."""
+        from src.ai.prompt import build_analysis_prompt
+        from src.models.blog import ScrapedComment, ScrapedPost, ScrapedProfile
+
+        profile = ScrapedProfile(
+            platform_id="12345",
+            username="mixtest",
+            follower_count=10000,
+            medias=[
+                ScrapedPost(
+                    platform_id="p1",
+                    media_type=1,
+                    like_count=500,
+                    comment_count=45,
+                    taken_at=datetime(2026, 1, 15, tzinfo=UTC),
+                    top_comments=[
+                        ScrapedComment(username="fan", text="Круто!"),
+                    ],
+                ),
+                ScrapedPost(
+                    platform_id="p2",
+                    media_type=1,
+                    like_count=100,
+                    comment_count=5,
+                    taken_at=datetime(2026, 1, 16, tzinfo=UTC),
+                ),
+            ],
+        )
+        messages = build_analysis_prompt(profile)
+        text = messages[1]["content"][0]["text"]
+
+        # Первый пост имеет комментарии
+        assert "@fan: Круто!" in text
+        # Текст содержит ровно одну строку Comments
+        assert text.count("Comments: [") == 1
+
+
 class TestBuildAnalysisPromptPlayCountZero:
     """BUG-13: play_count=0 — валидное значение, должно отображаться."""
 
@@ -822,3 +1021,310 @@ class TestBuildAnalysisPromptPlayCountZero:
         messages = build_analysis_prompt(profile)
         text = messages[1]["content"][0]["text"]
         assert "plays=0" in text
+
+
+class TestPromptNewInstructions:
+    """Тесты: промпт содержит инструкции для ранее недокументированных полей."""
+
+    def test_reasoning_instruction_in_prompt(self) -> None:
+        """Промпт содержит инструкцию для reasoning."""
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "reasoning" in SYSTEM_PROMPT
+        assert "ПЕРВЫМ" in SYSTEM_PROMPT
+
+    def test_content_quality_instruction(self) -> None:
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "content_quality" in SYSTEM_PROMPT
+        assert "студийное качество" in SYSTEM_PROMPT
+
+    def test_collaboration_risk_instruction(self) -> None:
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "collaboration_risk" in SYSTEM_PROMPT
+
+    def test_confidence_rubric_in_prompt(self) -> None:
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "крайне мало данных" in SYSTEM_PROMPT
+
+    def test_brand_safety_rubric_in_prompt(self) -> None:
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "brand_safety_score" in SYSTEM_PROMPT
+        assert "высокий риск" in SYSTEM_PROMPT
+
+    def test_comments_sentiment_instruction(self) -> None:
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "comments_sentiment" in SYSTEM_PROMPT
+
+    def test_posting_frequency_instruction(self) -> None:
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "posting_frequency" in SYSTEM_PROMPT
+        assert "posts_per_week" in SYSTEM_PROMPT
+
+    def test_audience_interaction_instruction(self) -> None:
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "audience_interaction" in SYSTEM_PROMPT
+
+    def test_estimated_audience_age_instruction(self) -> None:
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "estimated_audience_age" in SYSTEM_PROMPT
+
+    def test_estimated_audience_geo_instruction(self) -> None:
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "estimated_audience_geo" in SYSTEM_PROMPT
+
+    def test_content_tone_instruction(self) -> None:
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "content_tone" in SYSTEM_PROMPT
+
+    def test_estimated_audience_income_instruction(self) -> None:
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "estimated_audience_income" in SYSTEM_PROMPT
+        assert "бюджетные товары" in SYSTEM_PROMPT
+
+    def test_call_to_action_style_instruction(self) -> None:
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "call_to_action_style" in SYSTEM_PROMPT
+        assert "промокоды" in SYSTEM_PROMPT
+
+
+class TestPromptAgePctInstructions:
+    """Тесты: промпт содержит инструкции для возрастных процентов аудитории."""
+
+    def test_age_pct_instructions_present(self) -> None:
+        """Промпт содержит 'audience_age_*_pct' и 'ЗАПОЛНЯЙ ОБЯЗАТЕЛЬНО'."""
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "audience_age_*_pct" in SYSTEM_PROMPT
+        assert "ЗАПОЛНЯЙ ОБЯЗАТЕЛЬНО" in SYSTEM_PROMPT
+
+    def test_age_group_examples(self) -> None:
+        """Промпт содержит примеры распределения по возрастам."""
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "beauty-блогер 25 лет" in SYSTEM_PROMPT
+        assert "мама-блог 35 лет" in SYSTEM_PROMPT
+
+    def test_age_sum_equals_100(self) -> None:
+        """Промпт указывает что сумма = 100."""
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "Сумма всех групп = 100" in SYSTEM_PROMPT
+
+
+class TestPromptGeoPctInstructions:
+    """Тесты: промпт содержит инструкции для географических процентов аудитории."""
+
+    def test_geo_pct_instructions_present(self) -> None:
+        """Промпт содержит 'audience_kz_pct' и 'Сумма = 100'."""
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "audience_kz_pct" in SYSTEM_PROMPT
+        assert "Сумма = 100" in SYSTEM_PROMPT
+
+    def test_geo_typical_distribution_kz(self) -> None:
+        """Промпт содержит типичное распределение для блогера из Казахстана."""
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "kz=60-80" in SYSTEM_PROMPT
+
+    def test_geo_typical_distribution_ru(self) -> None:
+        """Промпт содержит типичное распределение для блогера из России."""
+        from src.ai.prompt import SYSTEM_PROMPT
+        assert "ru=70-90" in SYSTEM_PROMPT
+
+
+class TestBuildAnalysisPromptAccessibility:
+    """Тесты accessibility_caption в промпте."""
+
+    def test_accessibility_caption_in_post(self) -> None:
+        from src.ai.prompt import build_analysis_prompt
+        from src.models.blog import ScrapedPost, ScrapedProfile
+
+        profile = ScrapedProfile(
+            platform_id="12345",
+            username="alttest",
+            follower_count=10000,
+            medias=[
+                ScrapedPost(
+                    platform_id="p1",
+                    media_type=1,
+                    like_count=100,
+                    comment_count=10,
+                    accessibility_caption="Photo of woman with sunglasses at beach",
+                    taken_at=datetime(2026, 1, 15, tzinfo=UTC),
+                ),
+            ],
+        )
+        messages = build_analysis_prompt(profile)
+        text = messages[1]["content"][0]["text"]
+        assert 'alt="Photo of woman with sunglasses at beach"' in text
+
+    def test_no_accessibility_caption_no_alt(self) -> None:
+        from src.ai.prompt import build_analysis_prompt
+        from src.models.blog import ScrapedPost, ScrapedProfile
+
+        profile = ScrapedProfile(
+            platform_id="12345",
+            username="noalt",
+            follower_count=10000,
+            medias=[
+                ScrapedPost(
+                    platform_id="p1",
+                    media_type=1,
+                    like_count=100,
+                    comment_count=10,
+                    taken_at=datetime(2026, 1, 15, tzinfo=UTC),
+                ),
+            ],
+        )
+        messages = build_analysis_prompt(profile)
+        text = messages[1]["content"][0]["text"]
+        assert "alt=" not in text
+
+    def test_long_accessibility_caption_truncated(self) -> None:
+        from src.ai.prompt import build_analysis_prompt
+        from src.models.blog import ScrapedPost, ScrapedProfile
+
+        long_alt = "A" * 500
+        profile = ScrapedProfile(
+            platform_id="12345",
+            username="longalt",
+            follower_count=10000,
+            medias=[
+                ScrapedPost(
+                    platform_id="p1",
+                    media_type=1,
+                    like_count=100,
+                    comment_count=10,
+                    accessibility_caption=long_alt,
+                    taken_at=datetime(2026, 1, 15, tzinfo=UTC),
+                ),
+            ],
+        )
+        messages = build_analysis_prompt(profile)
+        text = messages[1]["content"][0]["text"]
+        assert "A" * 200 in text
+        assert "A" * 201 not in text
+
+
+class TestDataQualityHint:
+    """Тесты data quality hint в промпте."""
+
+    def _make_profile_with_data(self):
+        from src.models.blog import ScrapedComment, ScrapedPost, ScrapedProfile
+
+        return ScrapedProfile(
+            platform_id="12345",
+            username="testblogger",
+            biography="Мама двоих детей из Алматы",
+            follower_count=50000,
+            highlights=[],
+            medias=[
+                ScrapedPost(
+                    platform_id="p1",
+                    media_type=1,
+                    caption_text="Длинный текст поста о красоте и здоровье" * 2,
+                    like_count=500,
+                    comment_count=10,
+                    top_comments=[
+                        ScrapedComment(username="fan1", text="Классно!"),
+                    ],
+                    taken_at=datetime(2026, 1, 15, tzinfo=UTC),
+                ),
+                ScrapedPost(
+                    platform_id="p2",
+                    media_type=1,
+                    caption_text="Ещё один пост с текстом для анализа",
+                    like_count=300,
+                    comment_count=5,
+                    taken_at=datetime(2026, 1, 20, tzinfo=UTC),
+                ),
+            ],
+        )
+
+    def _extract_text(self, messages):
+        user_msg = messages[1]
+        content = user_msg["content"]
+        if isinstance(content, str):
+            return content
+        return " ".join(p["text"] for p in content if p.get("type") == "text")
+
+    def test_data_quality_hint_present(self) -> None:
+        from src.ai.prompt import build_analysis_prompt
+
+        profile = self._make_profile_with_data()
+        messages = build_analysis_prompt(profile)
+        text = self._extract_text(messages)
+
+        assert "Объём данных:" in text
+        assert "2 постов" in text
+        assert "с текстом" in text
+        assert "био заполнено" in text
+
+    def test_data_quality_hint_with_comments(self) -> None:
+        from src.ai.prompt import build_analysis_prompt
+
+        profile = self._make_profile_with_data()
+        messages = build_analysis_prompt(profile)
+        text = self._extract_text(messages)
+
+        assert "1 с комментариями" in text
+
+    def test_data_quality_hint_with_highlights(self) -> None:
+        from src.ai.prompt import build_analysis_prompt
+        from src.models.blog import ScrapedHighlight, ScrapedProfile
+
+        profile = ScrapedProfile(
+            platform_id="12345",
+            username="test",
+            follower_count=1000,
+            highlights=[
+                ScrapedHighlight(platform_id="h1", title="About", media_count=5),
+                ScrapedHighlight(platform_id="h2", title="Travel", media_count=3),
+            ],
+            medias=[],
+        )
+        messages = build_analysis_prompt(profile)
+        text = self._extract_text(messages)
+
+        assert "2 хайлайтов" in text
+
+
+class TestPromptQualityImprovements:
+    """Тесты улучшенных промпт-определений."""
+
+    def test_tags_instruction_russian_only(self) -> None:
+        """Промпт содержит инструкцию НЕ переводить теги на английский."""
+        from src.ai.prompt import SYSTEM_PROMPT
+
+        assert "НЕ переводи их на английский" in SYSTEM_PROMPT
+
+    def test_secondary_topics_constraint(self) -> None:
+        """Промпт содержит ограничение secondary_topics по primary_categories."""
+        from src.ai.prompt import SYSTEM_PROMPT
+
+        assert "ДОЛЖНЫ относиться к выбранным primary_categories" in SYSTEM_PROMPT
+
+    def test_secondary_topics_must_be_from_list(self) -> None:
+        """Промпт запрещает выдумывать secondary_topics вне справочника."""
+        from src.ai.prompt import SYSTEM_PROMPT
+
+        assert "Используй ТОЛЬКО значения из списка ниже" in SYSTEM_PROMPT
+
+    def test_tags_must_not_be_invented(self) -> None:
+        """Промпт запрещает придумывать новые теги."""
+        from src.ai.prompt import SYSTEM_PROMPT
+
+        assert "Запрещено придумывать новые теги" in SYSTEM_PROMPT
+
+    def test_engagement_quality_mixed_default(self) -> None:
+        """Промпт рекомендует 'mixed' если комментарии недоступны."""
+        from src.ai.prompt import SYSTEM_PROMPT
+
+        assert 'ИСПОЛЬЗУЙ "mixed" ЕСЛИ КОММЕНТАРИИ НЕДОСТУПНЫ' in SYSTEM_PROMPT
+
+    def test_confidence_strict_criteria(self) -> None:
+        """Промпт содержит строгие критерии для confidence."""
+        from src.ai.prompt import SYSTEM_PROMPT
+
+        assert "Большинство профилей НЕ должны получать 4" in SYSTEM_PROMPT
+
+    def test_tags_instruction_copy_exactly(self) -> None:
+        """Промпт требует копировать теги ТОЧНО из списка."""
+        from src.ai.prompt import SYSTEM_PROMPT
+
+        assert "Копируй теги ТОЧНО как они написаны в списке" in SYSTEM_PROMPT

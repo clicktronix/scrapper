@@ -48,6 +48,7 @@ class ScrapeTaskResult(BaseModel):
     username: str
     blog_id: str | None  # None при ошибке
     status: str  # "created" | "skipped" | "error"
+    reason: str | None = None  # Причина пропуска (deleted, deactivated)
 
 
 class ScrapeResponse(BaseModel):

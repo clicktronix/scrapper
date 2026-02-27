@@ -81,10 +81,12 @@ class Settings(BaseSettings):
     posts_to_fetch: int = 25          # Количество медиа из API
     thumbnails_to_persist: int = 7    # Рандомных миниатюр для загрузки в Storage
     highlights_to_fetch: int = 3
+    comments_to_fetch: int = 10       # Комментариев на пост
+    posts_with_comments: int = 3      # Постов с комментариями
 
     # AI Batch
     batch_min_size: int = 10
-    batch_model: str = "gpt-5-nano"
+    batch_model: str = "gpt-5-mini"
 
     # Воркер
     worker_poll_interval: int = 30

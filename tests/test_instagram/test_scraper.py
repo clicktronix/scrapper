@@ -322,7 +322,7 @@ class TestInstagramScraperScrapeProfile:
         assert profile.username == "testuser"
         assert profile.follower_count == 50000
         assert len(profile.medias) > 0
-        assert profile.avg_er_posts is not None
+        assert profile.avg_er is not None
 
     async def test_zero_followers_no_er(self) -> None:
         """0 подписчиков — ER не вычисляется."""
@@ -894,7 +894,7 @@ class TestScrapeProfileEmptyMedias:
         profile = await scraper.scrape_profile("testuser")
 
         assert profile.medias == []
-        assert profile.avg_er_posts is None
+        assert profile.avg_er is None
         assert profile.avg_er_reels is None
         assert profile.er_trend is None
         assert profile.posts_per_week is None
@@ -1214,3 +1214,210 @@ class TestDiscoverNewFields:
         assert result[0].is_verified is True
         assert result[0].biography == "My bio"
         assert result[0].account_type == 3
+
+
+class TestInstagrapiCommentsFetching:
+    """Тесты загрузки комментариев через instagrapi."""
+
+    async def test_comments_fetched_for_eligible_posts(self) -> None:
+        """Комментарии загружаются для постов с comment_count > 0."""
+        from unittest.mock import AsyncMock
+
+        from src.platforms.instagram.scraper import InstagramScraper
+
+        pool = MagicMock()
+        settings = MagicMock()
+        settings.posts_to_fetch = 20
+        settings.highlights_to_fetch = 3
+        settings.comments_to_fetch = 10
+        settings.posts_with_comments = 3
+
+        user = _mock_ig_user()
+        medias = [
+            _mock_ig_media("1", likes=100, comments=20, days_ago=1),
+            _mock_ig_media("2", likes=50, comments=5, days_ago=2),
+        ]
+
+        # Мок комментариев
+        comment1 = MagicMock()
+        comment1.text = "Отличный пост!"
+        comment1.user.username = "fan1"
+        comment2 = MagicMock()
+        comment2.text = "Круто!"
+        comment2.user.username = "fan2"
+
+        pool.safe_request = AsyncMock(side_effect=[
+            user,
+            medias,
+            [],              # highlights
+            [comment1, comment2],  # комментарии к посту 1
+            [comment1],            # комментарии к посту 2
+        ])
+
+        scraper = InstagramScraper(pool, settings)
+        profile = await scraper.scrape_profile("testuser")
+
+        assert len(profile.medias[0].top_comments) == 2
+        assert profile.medias[0].top_comments[0].username == "fan1"
+        assert profile.medias[0].top_comments[0].text == "Отличный пост!"
+        assert len(profile.medias[1].top_comments) == 1
+
+    async def test_comments_skipped_for_disabled(self) -> None:
+        """Комментарии не загружаются для постов с comments_disabled=True."""
+        from unittest.mock import AsyncMock
+
+        from src.platforms.instagram.scraper import InstagramScraper
+
+        pool = MagicMock()
+        settings = MagicMock()
+        settings.posts_to_fetch = 20
+        settings.highlights_to_fetch = 3
+        settings.comments_to_fetch = 10
+        settings.posts_with_comments = 3
+
+        user = _mock_ig_user()
+        media = _mock_ig_media("1", comments=20, days_ago=1)
+        media.comments_disabled = True
+
+        pool.safe_request = AsyncMock(side_effect=[user, [media], []])
+
+        scraper = InstagramScraper(pool, settings)
+        profile = await scraper.scrape_profile("testuser")
+
+        # Только 3 вызова: user, medias, highlights (без комментариев)
+        assert pool.safe_request.call_count == 3
+        assert profile.medias[0].top_comments == []
+
+    async def test_comments_skipped_for_zero_count(self) -> None:
+        """Комментарии не загружаются для постов с comment_count=0."""
+        from unittest.mock import AsyncMock
+
+        from src.platforms.instagram.scraper import InstagramScraper
+
+        pool = MagicMock()
+        settings = MagicMock()
+        settings.posts_to_fetch = 20
+        settings.highlights_to_fetch = 3
+        settings.comments_to_fetch = 10
+        settings.posts_with_comments = 3
+
+        user = _mock_ig_user()
+        media = _mock_ig_media("1", comments=0, days_ago=1)
+
+        pool.safe_request = AsyncMock(side_effect=[user, [media], []])
+
+        scraper = InstagramScraper(pool, settings)
+        profile = await scraper.scrape_profile("testuser")
+
+        assert pool.safe_request.call_count == 3
+        assert profile.medias[0].top_comments == []
+
+    async def test_comments_api_error_doesnt_crash(self) -> None:
+        """Ошибка API при загрузке комментариев не ломает весь скрап."""
+        from unittest.mock import AsyncMock
+
+        from src.platforms.instagram.scraper import InstagramScraper
+
+        pool = MagicMock()
+        settings = MagicMock()
+        settings.posts_to_fetch = 20
+        settings.highlights_to_fetch = 3
+        settings.comments_to_fetch = 10
+        settings.posts_with_comments = 3
+
+        user = _mock_ig_user()
+        medias = [
+            _mock_ig_media("1", comments=10, days_ago=1),
+            _mock_ig_media("2", comments=5, days_ago=2),
+        ]
+
+        comment = MagicMock()
+        comment.text = "Ок"
+        comment.user.username = "fan1"
+
+        pool.safe_request = AsyncMock(side_effect=[
+            user, medias, [],
+            RuntimeError("API error"),  # ошибка для поста 1
+            [comment],                  # комментарии для поста 2
+        ])
+
+        scraper = InstagramScraper(pool, settings)
+        profile = await scraper.scrape_profile("testuser")
+
+        assert profile.medias[0].top_comments == []
+        assert len(profile.medias[1].top_comments) == 1
+
+    async def test_comments_limited_to_posts_with_comments(self) -> None:
+        """Загружаем комментарии только для первых posts_with_comments постов."""
+        from unittest.mock import AsyncMock
+
+        from src.platforms.instagram.scraper import InstagramScraper
+
+        pool = MagicMock()
+        settings = MagicMock()
+        settings.posts_to_fetch = 20
+        settings.highlights_to_fetch = 3
+        settings.comments_to_fetch = 10
+        settings.posts_with_comments = 2
+
+        user = _mock_ig_user()
+        medias = [_mock_ig_media(str(i), comments=10, days_ago=i) for i in range(5)]
+
+        comment = MagicMock()
+        comment.text = "Коммент"
+        comment.user.username = "fan"
+
+        pool.safe_request = AsyncMock(side_effect=[
+            user, medias, [],
+            [comment],  # пост 0
+            [comment],  # пост 1
+        ])
+
+        scraper = InstagramScraper(pool, settings)
+        await scraper.scrape_profile("testuser")
+
+        # 3 (user + medias + highlights) + 2 (комментарии) = 5 вызовов
+        assert pool.safe_request.call_count == 5
+
+    async def test_empty_comments_skipped(self) -> None:
+        """Пустые комментарии (без текста или username) пропускаются."""
+        from unittest.mock import AsyncMock
+
+        from src.platforms.instagram.scraper import InstagramScraper
+
+        pool = MagicMock()
+        settings = MagicMock()
+        settings.posts_to_fetch = 20
+        settings.highlights_to_fetch = 3
+        settings.comments_to_fetch = 10
+        settings.posts_with_comments = 3
+
+        user = _mock_ig_user()
+        medias = [_mock_ig_media("1", comments=10, days_ago=1)]
+
+        c_empty = MagicMock()
+        c_empty.text = ""
+        c_empty.user.username = "fan1"
+
+        c_no_user = MagicMock()
+        c_no_user.text = "Текст"
+        c_no_user.user = None
+
+        c_whitespace = MagicMock()
+        c_whitespace.text = "   "
+        c_whitespace.user.username = "fan2"
+
+        c_valid = MagicMock()
+        c_valid.text = "Ок!"
+        c_valid.user.username = "fan3"
+
+        pool.safe_request = AsyncMock(side_effect=[
+            user, medias, [],
+            [c_empty, c_no_user, c_whitespace, c_valid],
+        ])
+
+        scraper = InstagramScraper(pool, settings)
+        profile = await scraper.scrape_profile("testuser")
+
+        assert len(profile.medias[0].top_comments) == 1
+        assert profile.medias[0].top_comments[0].username == "fan3"

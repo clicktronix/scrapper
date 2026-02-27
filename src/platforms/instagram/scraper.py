@@ -5,7 +5,7 @@ from instagrapi.exceptions import UserNotFound
 from loguru import logger
 
 from src.config import Settings
-from src.models.blog import ScrapedHighlight, ScrapedPost, ScrapedProfile
+from src.models.blog import ScrapedComment, ScrapedHighlight, ScrapedPost, ScrapedProfile
 from src.platforms.base import DiscoveredProfile
 from src.platforms.instagram.client import AccountPool
 from src.platforms.instagram.exceptions import PrivateAccountError
@@ -169,6 +169,10 @@ def _highlight_info(client: Any, pk: int) -> Any:
     return client.highlight_info(pk)
 
 
+def _media_comments(client: Any, media_id: str, amount: int) -> Any:
+    return client.media_comments(media_id, amount=amount)
+
+
 def _hashtag_medias_top(client: Any, hashtag: str, amount: int) -> Any:
     return client.hashtag_medias_top(hashtag, amount=amount)
 
@@ -218,8 +222,28 @@ class InstagramScraper:
         # 4. Маппинг — все медиа в один список (без разделения на посты/рилсы)
         medias_mapped = [media_to_scraped_post(m) for m in medias]
 
-        # Разделение только для вычисления ER-метрик (не для сохранения)
-        posts_for_er = [p for p in medias_mapped if not (p.media_type == 2 and p.product_type == "clips")]
+        # 5. Комментарии для первых N постов с включёнными комментариями
+        posts_for_comments = [
+            p for p in medias_mapped
+            if not p.comments_disabled and p.comment_count > 0
+        ][:self.settings.posts_with_comments]
+
+        for post in posts_for_comments:
+            try:
+                raw_comments = await self.pool.safe_request(
+                    _media_comments, post.platform_id, self.settings.comments_to_fetch
+                )
+                comments: list[ScrapedComment] = []
+                for c in raw_comments[:self.settings.comments_to_fetch]:
+                    text = (c.text or "").strip()
+                    uname = c.user.username if c.user else ""
+                    if text and uname:
+                        comments.append(ScrapedComment(username=uname, text=text))
+                post.top_comments = comments
+            except Exception as e:
+                logger.warning(f"Failed to fetch comments for {post.platform_id}: {e}")
+
+        # Рилсы отдельно для avg_er_reels
         reels_for_er = [p for p in medias_mapped if p.media_type == 2 and p.product_type == "clips"]
 
         # Вычислить engagement_rate для всех медиа
@@ -270,7 +294,7 @@ class InstagramScraper:
             profile_pic_url=str(user.profile_pic_url) if user.profile_pic_url else None,
             medias=medias_mapped,
             highlights=highlights,
-            avg_er_posts=calculate_er(posts_for_er, user.follower_count),
+            avg_er=calculate_er(medias_mapped, user.follower_count),
             avg_er_reels=calculate_er(reels_for_er, user.follower_count),
             er_trend=calculate_er_trend(medias_mapped, user.follower_count),
             posts_per_week=calculate_posts_per_week(medias_mapped),
@@ -278,7 +302,7 @@ class InstagramScraper:
 
         logger.info(
             f"Scraped @{username}: {len(medias_mapped)} publications, "
-            f"{len(highlights)} highlights, ER={profile.avg_er_posts}"
+            f"{len(highlights)} highlights, ER={profile.avg_er}"
         )
         return profile
 

@@ -424,7 +424,7 @@ class TestHikerInstagramScraper:
         profile = await scraper.scrape_profile("testuser")
 
         # ER = median(60) / 1000 * 100 = 6.0
-        assert profile.avg_er_posts == 6.0
+        assert profile.avg_er == 6.0
 
     async def test_scrape_profile_highlight_detail_failure(
         self, scraper: HikerInstagramScraper, mock_client: MagicMock
@@ -455,7 +455,7 @@ class TestHikerInstagramScraper:
         profile = await scraper.scrape_profile("testuser")
 
         assert profile.medias == []
-        assert profile.avg_er_posts is None
+        assert profile.avg_er is None
 
     async def test_discover_raises_not_implemented(
         self, scraper: HikerInstagramScraper
@@ -463,6 +463,164 @@ class TestHikerInstagramScraper:
         """Discover должен бросать NotImplementedError."""
         with pytest.raises(NotImplementedError, match="не поддерживает discover"):
             await scraper.discover("travel", 1000)
+
+
+class TestHikerCommentsFetching:
+    """Тесты загрузки комментариев через HikerAPI."""
+
+    @pytest.fixture
+    def settings(self) -> MagicMock:
+        s = MagicMock()
+        s.posts_to_fetch = 20
+        s.highlights_to_fetch = 2
+        s.comments_to_fetch = 10
+        s.posts_with_comments = 3
+        return s
+
+    @pytest.fixture
+    def mock_client(self) -> MagicMock:
+        return MagicMock()
+
+    @pytest.fixture
+    def scraper(self, settings: MagicMock, mock_client: MagicMock) -> HikerInstagramScraper:
+        with patch("src.platforms.instagram.hiker_scraper.SafeHikerClient", return_value=mock_client):
+            return HikerInstagramScraper(token="test-token", settings=settings)
+
+    def _setup_basic_profile(self, mock_client: MagicMock, medias: list[dict[str, Any]]) -> None:
+        """Настроить моки для базового профиля."""
+        user = _mock_hiker_user()
+        mock_client.user_by_username_v2.return_value = {"user": user}
+        mock_client.user_medias_chunk_v1.return_value = [medias, ""]
+        mock_client.user_highlights.return_value = []
+
+    async def test_comments_fetched_for_eligible_posts(
+        self, scraper: HikerInstagramScraper, mock_client: MagicMock
+    ) -> None:
+        """Комментарии загружаются для постов с comment_count > 0 и comments_disabled=False."""
+        medias = [
+            _mock_hiker_media("1", likes=100, comments=20, taken_at=1706400000),
+            _mock_hiker_media("2", likes=50, comments=5, taken_at=1706486400),
+        ]
+        self._setup_basic_profile(mock_client, medias)
+
+        mock_client.media_comments_chunk_v1.return_value = [
+            {"text": "Отличный пост!", "user": {"username": "fan1"}},
+            {"text": "Круто!", "user": {"username": "fan2"}},
+        ]
+
+        profile = await scraper.scrape_profile("testuser")
+
+        # Оба поста имеют комментарии
+        assert len(profile.medias[0].top_comments) == 2
+        assert profile.medias[0].top_comments[0].username == "fan1"
+        assert profile.medias[0].top_comments[0].text == "Отличный пост!"
+        assert profile.medias[0].top_comments[1].username == "fan2"
+        assert len(profile.medias[1].top_comments) == 2
+
+    async def test_comments_not_fetched_for_disabled(
+        self, scraper: HikerInstagramScraper, mock_client: MagicMock
+    ) -> None:
+        """Комментарии не загружаются для постов с comments_disabled=True."""
+        medias = [
+            _mock_hiker_media("1", comments=20, taken_at=1706400000),
+        ]
+        medias[0]["comments_disabled"] = True
+        self._setup_basic_profile(mock_client, medias)
+
+        profile = await scraper.scrape_profile("testuser")
+
+        mock_client.media_comments_chunk_v1.assert_not_called()
+        assert profile.medias[0].top_comments == []
+
+    async def test_comments_not_fetched_for_zero_count(
+        self, scraper: HikerInstagramScraper, mock_client: MagicMock
+    ) -> None:
+        """Комментарии не загружаются для постов с comment_count=0."""
+        medias = [
+            _mock_hiker_media("1", comments=0, taken_at=1706400000),
+        ]
+        self._setup_basic_profile(mock_client, medias)
+
+        profile = await scraper.scrape_profile("testuser")
+
+        mock_client.media_comments_chunk_v1.assert_not_called()
+        assert profile.medias[0].top_comments == []
+
+    async def test_comments_api_error_doesnt_crash(
+        self, scraper: HikerInstagramScraper, mock_client: MagicMock
+    ) -> None:
+        """Ошибка API при загрузке комментариев не ломает весь скрап."""
+        medias = [
+            _mock_hiker_media("1", comments=10, taken_at=1706400000),
+            _mock_hiker_media("2", comments=5, taken_at=1706486400),
+        ]
+        self._setup_basic_profile(mock_client, medias)
+
+        # Первый вызов падает, второй OK
+        mock_client.media_comments_chunk_v1.side_effect = [
+            Exception("API error"),
+            [{"text": "Ок", "user": {"username": "fan1"}}],
+        ]
+
+        profile = await scraper.scrape_profile("testuser")
+
+        assert profile.medias[0].top_comments == []
+        assert len(profile.medias[1].top_comments) == 1
+
+    async def test_comments_limited_to_posts_with_comments(
+        self, scraper: HikerInstagramScraper, mock_client: MagicMock, settings: MagicMock
+    ) -> None:
+        """Загружаем комментарии только для первых posts_with_comments постов."""
+        settings.posts_with_comments = 2
+        medias = [
+            _mock_hiker_media(str(i), comments=10, taken_at=1706400000 + i * 86400)
+            for i in range(5)
+        ]
+        self._setup_basic_profile(mock_client, medias)
+
+        mock_client.media_comments_chunk_v1.return_value = [
+            {"text": "Коммент", "user": {"username": "fan"}},
+        ]
+
+        await scraper.scrape_profile("testuser")
+
+        assert mock_client.media_comments_chunk_v1.call_count == 2
+
+    async def test_empty_comments_skipped(
+        self, scraper: HikerInstagramScraper, mock_client: MagicMock
+    ) -> None:
+        """Пустые комментарии (без текста или username) пропускаются."""
+        medias = [
+            _mock_hiker_media("1", comments=10, taken_at=1706400000),
+        ]
+        self._setup_basic_profile(mock_client, medias)
+
+        mock_client.media_comments_chunk_v1.return_value = [
+            {"text": "", "user": {"username": "fan1"}},           # пустой текст
+            {"text": "Норм", "user": {}},                         # нет username
+            {"text": "  ", "user": {"username": "fan2"}},         # пробелы
+            {"text": "Ок!", "user": {"username": "fan3"}},        # валидный
+        ]
+
+        profile = await scraper.scrape_profile("testuser")
+
+        assert len(profile.medias[0].top_comments) == 1
+        assert profile.medias[0].top_comments[0].username == "fan3"
+
+    async def test_comments_none_response(
+        self, scraper: HikerInstagramScraper, mock_client: MagicMock
+    ) -> None:
+        """None ответ от API → пустой список комментариев."""
+        medias = [
+            _mock_hiker_media("1", comments=10, taken_at=1706400000),
+        ]
+        self._setup_basic_profile(mock_client, medias)
+
+        mock_client.media_comments_chunk_v1.return_value = None
+
+        profile = await scraper.scrape_profile("testuser")
+
+        assert profile.medias[0].top_comments == []
 
 
 class TestSafeHikerClient:

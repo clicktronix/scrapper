@@ -8,7 +8,7 @@ from hikerapi import Client
 from loguru import logger
 
 from src.config import Settings
-from src.models.blog import ScrapedHighlight, ScrapedPost, ScrapedProfile
+from src.models.blog import ScrapedComment, ScrapedHighlight, ScrapedPost, ScrapedProfile
 from src.platforms.base import DiscoveredProfile
 from src.platforms.instagram.exceptions import (
     HikerAPIError,
@@ -338,8 +338,29 @@ class HikerInstagramScraper:
         # 4. Маппинг — все медиа в один список (без разделения на посты/рилсы)
         medias_mapped = [_hiker_media_to_post(m) for m in raw_medias]
 
-        # Разделение только для вычисления ER-метрик (не для сохранения)
-        posts_for_er = [p for p in medias_mapped if not (p.media_type == 2 and p.product_type == "clips")]
+        # 5. Комментарии для первых N постов с включёнными комментариями
+        posts_for_comments = [
+            p for p in medias_mapped
+            if not p.comments_disabled and p.comment_count > 0
+        ][:self.settings.posts_with_comments]
+
+        for post in posts_for_comments:
+            try:
+                raw_comments = await asyncio.to_thread(
+                    self.cl.media_comments_chunk_v1, post.platform_id
+                )
+                comments: list[ScrapedComment] = []
+                for c in (raw_comments or [])[:self.settings.comments_to_fetch]:
+                    text = c.get("text", "").strip()
+                    user = c.get("user") or {}
+                    uname = user.get("username", "")
+                    if text and uname:
+                        comments.append(ScrapedComment(username=uname, text=text))
+                post.top_comments = comments
+            except Exception as e:
+                logger.warning(f"[HikerAPI] Failed to fetch comments for {post.platform_id}: {e}")
+
+        # Рилсы отдельно для avg_er_reels
         reels_for_er = [p for p in medias_mapped if p.media_type == 2 and p.product_type == "clips"]
 
         # Вычислить engagement_rate для всех медиа
@@ -384,7 +405,7 @@ class HikerInstagramScraper:
             profile_pic_url=user.get("profile_pic_url"),
             medias=medias_mapped,
             highlights=highlights,
-            avg_er_posts=calculate_er(posts_for_er, follower_count),
+            avg_er=calculate_er(medias_mapped, follower_count),
             avg_er_reels=calculate_er(reels_for_er, follower_count),
             er_trend=calculate_er_trend(medias_mapped, follower_count),
             posts_per_week=calculate_posts_per_week(medias_mapped),
@@ -392,7 +413,7 @@ class HikerInstagramScraper:
 
         logger.info(
             f"[HikerAPI] Scraped @{username}: {len(medias_mapped)} publications, "
-            f"{len(highlights)} highlights, ER={profile.avg_er_posts}"
+            f"{len(highlights)} highlights, ER={profile.avg_er}"
         )
         return profile
 

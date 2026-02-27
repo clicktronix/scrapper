@@ -181,6 +181,22 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
             try:
                 blog_id = await _find_or_create_blog(db, username)
 
+                # Не создавать задачу для deleted/deactivated блогов
+                blog_row = await run_in_thread(
+                    db.table("blogs").select("scrape_status")
+                    .eq("id", blog_id).execute,
+                    retry_transient=True,
+                )
+                blog_status = blog_row.data[0]["scrape_status"] if blog_row.data else None
+                if blog_status in ("deleted", "deactivated"):
+                    results.append({
+                        "task_id": None, "username": username,
+                        "blog_id": blog_id, "status": "skipped",
+                        "reason": f"blog is {blog_status}",
+                    })
+                    skipped += 1
+                    continue
+
                 # Проверка свежести — не создавать задачу для недавно скрапленных
                 if await is_blog_fresh(db, blog_id, settings.rescrape_days):
                     results.append({"task_id": None, "username": username, "blog_id": blog_id, "status": "skipped"})

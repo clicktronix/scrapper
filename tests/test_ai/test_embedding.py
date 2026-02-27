@@ -16,7 +16,7 @@ class TestBuildEmbeddingText:
         insights = AIInsights(
             short_label="фуд-блогер",
             short_summary="Готовит казахскую кухню.",
-            tags=["видео-контент", "reels", "рецепты"],
+            tags=["видео-контент", "reels", "юмор", "мама", "ЗОЖ", "эстетика", "сторителлинг"],
             blogger_profile={
                 "profession": "повар",
                 "city": "Алматы",
@@ -25,11 +25,13 @@ class TestBuildEmbeddingText:
                 "speaks_languages": ["русский"],
             },
             content={
-                "primary_topic": "food",
+                "primary_categories": ["food"],
                 "secondary_topics": ["Рецепты", "ПП и диеты"],
             },
             audience_inference={
-                "estimated_audience_gender": "mostly_female",
+                "audience_male_pct": 20,
+                "audience_female_pct": 75,
+                "audience_other_pct": 5,
                 "estimated_audience_age": "25-34",
                 "estimated_audience_geo": "kz",
                 "audience_interests": ["кулинария", "ЗОЖ"],
@@ -45,7 +47,6 @@ class TestBuildEmbeddingText:
 
         text = build_embedding_text(insights)
 
-        assert "фуд-блогер" in text
         assert "Готовит казахскую кухню" in text
         assert "food" in text
         assert "повар" in text
@@ -69,13 +70,16 @@ class TestBuildEmbeddingText:
 
         insights = AIInsights(
             audience_inference={
-                "estimated_audience_gender": "mostly_female",
+                "audience_male_pct": 15,
+                "audience_female_pct": 80,
+                "audience_other_pct": 5,
                 "audience_interests": ["красота", "мода"],
             },
         )
 
         text = build_embedding_text(insights)
-        assert "mostly_female" in text
+        assert "муж. 15%" in text
+        assert "жен. 80%" in text
         assert "красота" in text
 
     def test_embedding_text_includes_marketing(self) -> None:
@@ -92,6 +96,68 @@ class TestBuildEmbeddingText:
         text = build_embedding_text(insights)
         assert "beauty" in text
         assert "алкоголь" in text
+
+
+class TestEmbeddingQualityFields:
+    """Тесты quality-полей в embedding тексте."""
+
+    def test_includes_engagement_quality(self) -> None:
+        """engagement_quality=organic → 'органическая' в тексте."""
+        from src.ai.embedding import build_embedding_text
+
+        insights = AIInsights(audience_inference={"engagement_quality": "organic"})
+        text = build_embedding_text(insights)
+        assert "органическая" in text
+
+    def test_includes_brand_safety_score(self) -> None:
+        """brand_safety_score → 'безопасность бренда: N/5' в тексте."""
+        from src.ai.embedding import build_embedding_text
+
+        insights = AIInsights(marketing_value={"brand_safety_score": 4})
+        text = build_embedding_text(insights)
+        assert "безопасность бренда: 4/5" in text
+
+    def test_includes_lifestyle_level(self) -> None:
+        """lifestyle_level → в тексте."""
+        from src.ai.embedding import build_embedding_text
+
+        insights = AIInsights(lifestyle={"lifestyle_level": "premium"})
+        text = build_embedding_text(insights)
+        assert "premium" in text
+
+    def test_includes_content_quality(self) -> None:
+        """content_quality → 'качество контента: X' в тексте."""
+        from src.ai.embedding import build_embedding_text
+
+        insights = AIInsights(content={"content_quality": "high"})
+        text = build_embedding_text(insights)
+        assert "качество контента: high" in text
+
+    def test_includes_collaboration_risk(self) -> None:
+        """collaboration_risk → 'риск коллаборации: X' в тексте."""
+        from src.ai.embedding import build_embedding_text
+
+        insights = AIInsights(marketing_value={"collaboration_risk": "low"})
+        text = build_embedding_text(insights)
+        assert "риск коллаборации: low" in text
+
+    def test_short_summary_without_label(self) -> None:
+        """short_summary используется без short_label."""
+        from src.ai.embedding import build_embedding_text
+
+        insights = AIInsights(
+            short_summary="Готовит казахскую кухню, снимает рецепты для YouTube.",
+        )
+        text = build_embedding_text(insights)
+        assert "Готовит казахскую кухню" in text
+
+    def test_empty_quality_fields_no_section(self) -> None:
+        """Без quality-полей секция 'Характеристики' не добавляется."""
+        from src.ai.embedding import build_embedding_text
+
+        insights = AIInsights()
+        text = build_embedding_text(insights)
+        assert "Характеристики" not in text
 
 
 class TestGenerateEmbedding:

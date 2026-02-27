@@ -7,10 +7,64 @@ from typing import Any
 from loguru import logger
 from supabase import Client
 
+# Supabase Python SDK использует синхронный httpx-клиент с HTTP/2.
+# После простоя (sleep/network drop) соединения в пуле становятся «stale»,
+# и при следующем запросе ОС возвращает EAGAIN (errno 35 на macOS),
+# Connection reset (errno 54) или Broken pipe (errno 32).
+# httpx оборачивает OSError в свои исключения (httpx.ReadError и т.д.),
+# поэтому ловить голый OSError недостаточно — нужно проверять всю цепочку
+# __cause__/__context__ и строковое представление.
+# Retry на уровне run_in_thread покрывает ВСЕ операции с Supabase
+# (PostgREST-запросы, RPC, Storage), а не только отдельные функции.
+_RUN_IN_THREAD_MAX_RETRIES = 3
+_RUN_IN_THREAD_RETRY_DELAY = 1.0
+_TRANSIENT_OS_ERROR_CODES = {11, 32, 35, 54}
 
-async def run_in_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
-    """Выполнить синхронный вызов Supabase в отдельном потоке."""
-    return await asyncio.to_thread(func, *args, **kwargs)
+
+def _is_transient_network_error(exc: BaseException) -> bool:
+    """Проверить, является ли ошибка транзиентной сетевой (EAGAIN, broken pipe и т.д.)."""
+    # Проверяем всю цепочку причин — OSError может быть обёрнут в httpx.ReadError
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, OSError) and current.errno in _TRANSIENT_OS_ERROR_CODES:
+            # 11/35 = EAGAIN (Linux/macOS), 54 = Connection reset, 32 = Broken pipe
+            return True
+        current = current.__cause__ or current.__context__
+    # Fallback: строковая проверка для случаев, когда errno не доступен
+    err_str = str(exc)
+    return any(marker in err_str for marker in (
+        "Resource temporarily unavailable",
+        "Errno 11",
+        "Errno 35",
+        "Connection reset",
+        "Broken pipe",
+    ))
+
+
+async def run_in_thread(
+    func: Any, *args: Any, retry_transient: bool = False, **kwargs: Any
+) -> Any:
+    """Выполнить синхронный вызов Supabase в отдельном потоке.
+
+    По умолчанию retry отключен, чтобы не дублировать неидемпотентные операции
+    (например insert) при сетевых ошибках после частичного успеха.
+    Для идемпотентных вызовов включайте retry_transient=True.
+    """
+    if not retry_transient:
+        return await asyncio.to_thread(func, *args, **kwargs)
+
+    for attempt in range(1, _RUN_IN_THREAD_MAX_RETRIES + 1):
+        try:
+            return await asyncio.to_thread(func, *args, **kwargs)
+        except Exception as e:
+            if _is_transient_network_error(e) and attempt < _RUN_IN_THREAD_MAX_RETRIES:
+                logger.warning(
+                    f"[run_in_thread] Транзиентная ошибка (попытка {attempt}/"
+                    f"{_RUN_IN_THREAD_MAX_RETRIES}): {e}"
+                )
+                await asyncio.sleep(_RUN_IN_THREAD_RETRY_DELAY * attempt)
+                continue
+            raise
 
 
 def sanitize_error(error: str) -> str:
@@ -174,18 +228,27 @@ async def fetch_pending_tasks(db: Client, limit: int = 10) -> list[dict]:
 
 
 async def recover_stuck_tasks(
-    db: Client, max_running_minutes: int = 30
+    db: Client,
+    max_running_minutes: int = 30,
+    max_ai_running_minutes: int = 120,
 ) -> int:
     """
     Вернуть зависшие running задачи в pending.
-    Задачи full_scrape/discover, которые в running дольше max_running_minutes,
-    возвращаются в pending для повторной обработки.
-    ai_analysis не трогаем — у них свой механизм retry (retry_stale_batches).
+
+    full_scrape/discover — таймаут max_running_minutes (30 мин).
+    ai_analysis — таймаут max_ai_running_minutes (2ч).
+      AI задачи зависают если handle_batch_results упал с исключением
+      (например \u0000 в PostgreSQL). retry_stale_batches — последняя линия
+      обороны (4ч), а эта функция — основная.
     """
     threshold = (
         datetime.now(UTC) - timedelta(minutes=max_running_minutes)
     ).isoformat()
+    ai_threshold = (
+        datetime.now(UTC) - timedelta(minutes=max_ai_running_minutes)
+    ).isoformat()
 
+    # full_scrape / discover — короткий таймаут
     result = await run_in_thread(
         db.table("scrape_tasks")
         .select("id, task_type, attempts, max_attempts")
@@ -195,31 +258,41 @@ async def recover_stuck_tasks(
         .execute
     )
 
-    if not result.data:
+    # ai_analysis — длинный таймаут (батчи обрабатываются 1-2ч)
+    ai_result = await run_in_thread(
+        db.table("scrape_tasks")
+        .select("id, task_type, attempts, max_attempts")
+        .eq("status", "running")
+        .eq("task_type", "ai_analysis")
+        .lt("started_at", ai_threshold)
+        .execute
+    )
+
+    all_tasks = (result.data or []) + (ai_result.data or [])
+    if not all_tasks:
         return 0
 
     recovered = 0
-    for task in result.data:
+    for task in all_tasks:
+        timeout = max_ai_running_minutes if task["task_type"] == "ai_analysis" else max_running_minutes
         if task["attempts"] >= task["max_attempts"]:
-            # Исчерпаны попытки — помечаем как failed
             await run_in_thread(
                 db.table("scrape_tasks").update({
                     "status": "failed",
-                    "error_message": f"Stuck in running for >{max_running_minutes}min, max attempts exhausted",
+                    "error_message": f"Stuck in running for >{timeout}min, max attempts exhausted",
                 }).eq("id", task["id"]).execute
             )
         else:
-            # Возвращаем в pending
             await run_in_thread(
                 db.table("scrape_tasks").update({
                     "status": "pending",
-                    "error_message": f"Recovered: stuck in running for >{max_running_minutes}min",
+                    "error_message": f"Recovered: stuck in running for >{timeout}min",
                 }).eq("id", task["id"]).execute
             )
             recovered += 1
 
     if recovered:
-        logger.warning(f"Recovered {recovered} stuck tasks (>{max_running_minutes}min)")
+        logger.warning(f"Recovered {recovered} stuck tasks")
     return recovered
 
 

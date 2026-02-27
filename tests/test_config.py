@@ -84,7 +84,7 @@ class TestSettings:
         assert s.highlights_to_fetch == 3
         assert s.rescrape_days == 60
         assert s.batch_min_size == 10
-        assert s.batch_model == "gpt-5-nano"
+        assert s.batch_model == "gpt-5-mini"
         assert s.worker_poll_interval == 30
         assert s.worker_max_concurrent == 2
         assert s.log_level == "INFO"

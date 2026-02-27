@@ -1,4 +1,4 @@
-.PHONY: install dev down test lint lint-fix typecheck
+.PHONY: install dev down test lint lint-fix typecheck reanalyze
 
 install:
 	uv sync
@@ -20,3 +20,6 @@ lint-fix:
 
 typecheck:
 	uv run pyright src/
+
+reanalyze:
+	uv run python -m src.cli.reanalyze $(ARGS)

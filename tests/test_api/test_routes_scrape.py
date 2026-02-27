@@ -1,5 +1,5 @@
 """Тесты POST /api/tasks/scrape — создание full_scrape задач."""
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -176,3 +176,54 @@ class TestScrapeEndpoint:
         # Второй — успех
         assert data["tasks"][1]["status"] == "created"
         assert data["tasks"][1]["blog_id"] == "blog-2"
+
+    def test_deleted_blog_skipped(self) -> None:
+        """Блог со статусом 'deleted' → skipped с причиной."""
+        app = make_app()
+
+        # Мок run_in_thread для проверки статуса блога
+        status_result = MagicMock()
+        status_result.data = [{"scrape_status": "deleted"}]
+
+        with patch("src.api.app._find_or_create_blog", new_callable=AsyncMock) as mock_find:
+            mock_find.return_value = "blog-1"
+            with patch("src.api.app.run_in_thread", new_callable=AsyncMock) as mock_rt:
+                mock_rt.return_value = status_result
+                client = TestClient(app)
+                resp = client.post(
+                    "/api/tasks/scrape",
+                    json={"usernames": ["deleted_blogger"]},
+                    headers=AUTH_HEADERS,
+                )
+
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["created"] == 0
+        assert data["skipped"] == 1
+        assert data["tasks"][0]["status"] == "skipped"
+        assert data["tasks"][0]["reason"] == "blog is deleted"
+
+    def test_deactivated_blog_skipped(self) -> None:
+        """Блог со статусом 'deactivated' → skipped с причиной."""
+        app = make_app()
+
+        status_result = MagicMock()
+        status_result.data = [{"scrape_status": "deactivated"}]
+
+        with patch("src.api.app._find_or_create_blog", new_callable=AsyncMock) as mock_find:
+            mock_find.return_value = "blog-1"
+            with patch("src.api.app.run_in_thread", new_callable=AsyncMock) as mock_rt:
+                mock_rt.return_value = status_result
+                client = TestClient(app)
+                resp = client.post(
+                    "/api/tasks/scrape",
+                    json={"usernames": ["deactivated_blogger"]},
+                    headers=AUTH_HEADERS,
+                )
+
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["created"] == 0
+        assert data["skipped"] == 1
+        assert data["tasks"][0]["status"] == "skipped"
+        assert data["tasks"][0]["reason"] == "blog is deactivated"

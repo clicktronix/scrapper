@@ -58,6 +58,26 @@ UPLOAD_MAX_RETRIES = 3
 UPLOAD_RETRY_DELAY = 1.0  # секунды между попытками
 
 
+def _is_eagain(exc: BaseException) -> bool:
+    """Проверить, содержит ли исключение EAGAIN (Errno 11/35).
+
+    Supabase Storage SDK оборачивает OSError в httpx/storage3 исключения,
+    поэтому проверяем всю цепочку __cause__/__context__ и строку.
+    """
+    # Проверяем саму ошибку и всю цепочку причин
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, OSError) and current.errno in (11, 35):
+            return True
+        current = current.__cause__ or current.__context__
+    # Fallback: проверка строкового представления
+    return (
+        "Errno 11" in str(exc)
+        or "Errno 35" in str(exc)
+        or "Resource temporarily unavailable" in str(exc)
+    )
+
+
 async def upload_image(db: Client, path: str, data: bytes, content_type: str) -> bool:
     """Загрузить файл в Supabase Storage (upsert) с retry при EAGAIN."""
     for attempt in range(1, UPLOAD_MAX_RETRIES + 1):
@@ -69,18 +89,14 @@ async def upload_image(db: Client, path: str, data: bytes, content_type: str) ->
                 {"content-type": content_type, "upsert": "true"},
             )
             return True
-        except OSError as e:
-            # Errno 35 (EAGAIN) — ресурс временно недоступен, ретраим
-            if e.errno == 35 and attempt < UPLOAD_MAX_RETRIES:
+        except Exception as e:
+            if _is_eagain(e) and attempt < UPLOAD_MAX_RETRIES:
                 logger.warning(
                     f"[image_storage] EAGAIN при загрузке ({path}), "
                     f"попытка {attempt}/{UPLOAD_MAX_RETRIES}, жду {UPLOAD_RETRY_DELAY}с..."
                 )
                 await asyncio.sleep(UPLOAD_RETRY_DELAY * attempt)
                 continue
-            logger.error(f"[image_storage] Ошибка загрузки в Storage ({path}): {e}")
-            return False
-        except Exception as e:
             logger.error(f"[image_storage] Ошибка загрузки в Storage ({path}): {e}")
             return False
     return False

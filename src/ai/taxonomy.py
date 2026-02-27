@@ -529,6 +529,16 @@ TAGS: dict[str, list[str]] = {
 }
 
 
+# Плоские списки для enum-ограничений в JSON-схеме (OpenAI structured outputs)
+ALL_CATEGORY_CODES: list[str] = [cat["code"] for cat in CATEGORIES]
+ALL_SUBCATEGORY_NAMES: list[str] = sorted({
+    sub for cat in CATEGORIES for sub in cat["subcategories"]
+})
+ALL_TAG_NAMES: list[str] = sorted({
+    tag for tags in TAGS.values() for tag in tags
+})
+
+
 def get_categories_for_prompt() -> str:
     """Сформировать текст категорий для system prompt."""
     lines: list[str] = []
