@@ -594,7 +594,10 @@ class TestRetryTaxonomyMappings:
             patch("src.worker.scheduler.match_categories", new_callable=AsyncMock) as mock_match_categories,
             patch("src.worker.scheduler.match_tags", new_callable=AsyncMock) as mock_match_tags,
         ):
-            mock_run.return_value = blogs_result
+            mock_run.side_effect = [
+                blogs_result,  # blogs query
+                MagicMock(data=[]),  # blog_categories query (no existing matches)
+            ]
             await retry_taxonomy_mappings(mock_db)
 
             mock_match_categories.assert_called_once()

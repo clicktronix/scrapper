@@ -403,8 +403,8 @@ class TestHikerInstagramScraper:
         profile = await scraper.scrape_profile("testuser")
 
         assert len(profile.bio_links) == 2
-        assert profile.bio_links[0]["url"] == "https://example.com"
-        assert profile.bio_links[0]["title"] == "My Site"
+        assert profile.bio_links[0].url == "https://example.com"
+        assert profile.bio_links[0].title == "My Site"
 
     async def test_scrape_profile_engagement_rate(
         self, scraper: HikerInstagramScraper, mock_client: MagicMock

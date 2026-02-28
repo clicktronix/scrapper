@@ -144,19 +144,19 @@ class TestScrapedProfile:
 
     def test_profile_with_bio_links(self) -> None:
         """Профиль с bio_links в новом формате."""
-        from src.models.blog import ScrapedProfile
+        from src.models.blog import BioLink, ScrapedProfile
 
         p = ScrapedProfile(
             platform_id="user_bl",
             username="withlinks",
             bio_links=[
-                {"url": "https://t.me/channel", "title": "Telegram", "link_type": None},
-                {"url": "https://wa.me/777", "title": None, "link_type": None},
+                BioLink(url="https://t.me/channel", title="Telegram", link_type=None),
+                BioLink(url="https://wa.me/777", title=None, link_type=None),
             ],
         )
         assert len(p.bio_links) == 2
-        assert p.bio_links[0]["url"] == "https://t.me/channel"
-        assert p.bio_links[0]["title"] == "Telegram"
+        assert p.bio_links[0].url == "https://t.me/channel"
+        assert p.bio_links[0].title == "Telegram"
 
 
 class TestDiscoveredProfile:

@@ -1,0 +1,57 @@
+"""In-memory rate limiter: sliding window per IP."""
+import time
+from collections import defaultdict
+
+from fastapi import HTTPException, Request
+
+
+class RateLimiter:
+    """Простой in-memory rate limiter на основе sliding window per IP.
+
+    Аргументы:
+        max_requests: максимальное количество запросов в окне.
+        window_seconds: размер окна в секундах.
+    """
+
+    def __init__(self, max_requests: int = 60, window_seconds: int = 60) -> None:
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._store: dict[str, list[float]] = defaultdict(list)
+
+    async def check(self, request: Request) -> None:
+        """Проверить rate limit для запроса. Бросает HTTPException 429 при превышении.
+
+        Примечание: при использовании reverse proxy (nginx/traefik) убедитесь,
+        что request.client.host содержит реальный IP клиента (X-Forwarded-For),
+        иначе все запросы будут считаться от одного IP прокси.
+        """
+        # За reverse proxy (Railway, nginx) request.client.host = IP прокси
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            client_ip = forwarded.split(",")[0].strip()
+        else:
+            client_ip = request.client.host if request.client else "unknown"
+        now = time.time()
+        window_start = now - self.window_seconds
+
+        # Очистить устаревшие записи для этого IP
+        timestamps = self._store[client_ip]
+        self._store[client_ip] = [t for t in timestamps if t > window_start]
+
+        if len(self._store[client_ip]) >= self.max_requests:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+        self._store[client_ip].append(now)
+
+        # Периодическая очистка стухших IP (при росте store > 100 записей)
+        self._cleanup_stale(window_start)
+
+    def _cleanup_stale(self, window_start: float) -> None:
+        """Удалить IP-адреса без актуальных запросов (при превышении 100 записей в store)."""
+        if len(self._store) > 100:
+            stale_ips = [
+                ip for ip, ts in self._store.items()
+                if not ts or max(ts) <= window_start
+            ]
+            for ip in stale_ips:
+                del self._store[ip]

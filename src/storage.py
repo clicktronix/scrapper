@@ -1,9 +1,10 @@
 """Supabase Storage для хранения Instagram-сессий."""
-import asyncio
 import json
 
 from loguru import logger
 from supabase import Client
+
+from src.database import run_in_thread
 
 BUCKET_NAME = "instagram-sessions"
 
@@ -14,7 +15,7 @@ async def load_session(db: Client, account_name: str) -> dict | None:
     Возвращает dict для cl.load_settings() или None.
     """
     try:
-        data = await asyncio.to_thread(
+        data = await run_in_thread(
             db.storage.from_(BUCKET_NAME).download, f"{account_name}.json"
         )
         parsed = json.loads(data)
@@ -32,7 +33,7 @@ async def save_session(db: Client, account_name: str, settings: dict) -> None:
     """Сохранить сессию в Supabase Storage (перезаписать если есть)."""
     try:
         data = json.dumps(settings).encode()
-        await asyncio.to_thread(
+        await run_in_thread(
             db.storage.from_(BUCKET_NAME).upload,
             f"{account_name}.json",
             data,

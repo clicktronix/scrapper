@@ -1,6 +1,5 @@
 """Скрапинг Instagram-профилей через HikerAPI (SaaS-бэкенд)."""
 import asyncio
-from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -8,19 +7,29 @@ from hikerapi import Client
 from loguru import logger
 
 from src.config import Settings
-from src.models.blog import ScrapedComment, ScrapedHighlight, ScrapedPost, ScrapedProfile
+from src.models.blog import BioLink, ScrapedComment, ScrapedHighlight, ScrapedPost, ScrapedProfile
 from src.platforms.base import DiscoveredProfile
 from src.platforms.instagram.exceptions import (
     HikerAPIError,
     InsufficientBalanceError,
     PrivateAccountError,
 )
+from src.platforms.instagram.mappers import (
+    aggregate_story_data_from_dicts,
+    extract_carousel_count,
+    extract_cover_url,
+    extract_video_duration,
+    normalize_title,
+    parse_taken_at,
+)
 from src.platforms.instagram.metrics import (
+    assign_engagement_rates,
     calculate_er,
     calculate_er_trend,
     calculate_posts_per_week,
     extract_hashtags,
     extract_mentions,
+    select_posts_for_comments,
 )
 
 
@@ -90,12 +99,10 @@ def _hiker_media_to_post(media: dict[str, Any]) -> ScrapedPost:
         location_lat = location.get("lat")
         location_lng = location.get("lng")
 
+    media_type = media.get("media_type", 1)
+
     # Длительность видео
-    video_duration = None
-    if media.get("media_type") == 2:
-        dur = media.get("video_duration")
-        if dur and dur > 0:
-            video_duration = float(dur)
+    video_duration = extract_video_duration(media_type, media.get("video_duration"))
 
     # Usertags
     usertags_list: list[str] = []
@@ -112,30 +119,20 @@ def _hiker_media_to_post(media: dict[str, Any]) -> ScrapedPost:
     comments_disabled = bool(media.get("comments_disabled", False))
 
     # Title
-    title = media.get("title") or None
-    if title == "":
-        title = None
+    title = normalize_title(media.get("title"))
 
     # Carousel
-    carousel_media_count = None
-    if media.get("media_type") == 8:
-        resources = media.get("resources") or []
-        if resources:
-            carousel_media_count = len(resources)
+    carousel_media_count = extract_carousel_count(
+        media_type, media.get("resources") or []
+    )
 
     # taken_at — может быть int (timestamp) или str
-    taken_at_raw = media.get("taken_at")
-    if isinstance(taken_at_raw, int):
-        taken_at = datetime.fromtimestamp(taken_at_raw, tz=UTC)
-    elif isinstance(taken_at_raw, str):
-        taken_at = datetime.fromisoformat(taken_at_raw)
-    else:
-        taken_at = datetime.now(tz=UTC)
+    taken_at = parse_taken_at(media.get("taken_at"))
 
     return ScrapedPost(
         platform_id=str(media.get("pk", "")),
         shortcode=media.get("code"),
-        media_type=media.get("media_type", 1),
+        media_type=media_type,
         product_type=media.get("product_type") or None,
         caption_text=caption,
         hashtags=extract_hashtags(caption),
@@ -166,74 +163,26 @@ def _hiker_highlight_to_scraped(
     items: list[dict[str, Any]] | None = None,
 ) -> ScrapedHighlight:
     """Маппинг HikerAPI highlight dict → ScrapedHighlight."""
-    story_mentions: set[str] = set()
-    story_locations: set[str] = set()
-    story_links: set[str] = set()
-    story_sponsor_tags: set[str] = set()
-    story_hashtags: set[str] = set()
-    has_paid_partnership = False
-
     # items могут быть в самом highlight или переданы отдельно (из highlight_by_id_v2)
     story_items = items if items is not None else (highlight.get("items") or [])
 
-    for story in story_items:
-        # Mentions
-        for mention in story.get("mentions") or []:
-            if isinstance(mention, dict):
-                user = mention.get("user")
-                if isinstance(user, dict) and user.get("username"):
-                    story_mentions.add(user["username"])
-
-        # Locations
-        for loc in story.get("locations") or []:
-            if isinstance(loc, dict):
-                location = loc.get("location")
-                if isinstance(location, dict) and location.get("name"):
-                    story_locations.add(location["name"])
-
-        # Links
-        for link in story.get("links") or []:
-            if isinstance(link, dict):
-                url = link.get("webUri") or link.get("url")
-                if url:
-                    story_links.add(str(url))
-
-        # Sponsors
-        for sponsor in story.get("sponsor_tags") or []:
-            if isinstance(sponsor, dict) and sponsor.get("username"):
-                story_sponsor_tags.add(sponsor["username"])
-
-        # Paid partnership
-        if story.get("is_paid_partnership"):
-            has_paid_partnership = True
-
-        # Hashtags
-        for ht in story.get("hashtags") or []:
-            if isinstance(ht, dict):
-                hashtag = ht.get("hashtag")
-                if isinstance(hashtag, dict) and hashtag.get("name"):
-                    story_hashtags.add(hashtag["name"])
-                elif isinstance(hashtag, str):
-                    story_hashtags.add(hashtag)
+    # Агрегация данных из story items через общий helper
+    story_data = aggregate_story_data_from_dicts(story_items)
 
     # Cover URL
-    cover_url = None
-    cover_media = highlight.get("cover_media")
-    if isinstance(cover_media, dict):
-        cropped = cover_media.get("cropped_image_version") or {}
-        cover_url = cropped.get("url")
+    cover_url = extract_cover_url(highlight.get("cover_media"))
 
     return ScrapedHighlight(
         platform_id=str(highlight.get("pk", "")),
         title=highlight.get("title", ""),
         media_count=highlight.get("media_count", 0),
         cover_url=cover_url,
-        story_mentions=sorted(story_mentions),
-        story_locations=sorted(story_locations),
-        story_links=sorted(story_links),
-        story_sponsor_tags=sorted(story_sponsor_tags),
-        has_paid_partnership=has_paid_partnership,
-        story_hashtags=sorted(story_hashtags),
+        story_mentions=story_data["story_mentions"],
+        story_locations=story_data["story_locations"],
+        story_links=story_data["story_links"],
+        story_sponsor_tags=story_data["story_sponsor_tags"],
+        has_paid_partnership=story_data["has_paid_partnership"],
+        story_hashtags=story_data["story_hashtags"],
     )
 
 
@@ -250,7 +199,7 @@ class SafeHikerClient(Client):
         headers: dict[str, Any] | None = None,
     ) -> Any:
         if params:
-            params = {k: v for k, v in params.items() if v}
+            params = {k: v for k, v in params.items() if v is not None}
         resp: httpx.Response = self._client.request(
             method,
             path,
@@ -309,14 +258,14 @@ class HikerInstagramScraper:
 
         user_id = str(user["pk"])
 
-        # 2. Медиа (sync → thread)
-        result = await asyncio.to_thread(self.cl.user_medias_chunk_v1, user_id)
-        raw_medias: list[dict[str, Any]] = result[0] if isinstance(result, list) and result else []
-
-        # 3. Хайлайты (sync → thread)
-        raw_highlights = await asyncio.to_thread(
-            self.cl.user_highlights, user_id, amount=self.settings.highlights_to_fetch
+        # 2+3. Медиа и хайлайты параллельно (sync → thread)
+        result, raw_highlights = await asyncio.gather(
+            asyncio.to_thread(self.cl.user_medias_chunk_v1, user_id),
+            asyncio.to_thread(
+                self.cl.user_highlights, user_id, amount=self.settings.highlights_to_fetch
+            ),
         )
+        raw_medias: list[dict[str, Any]] = result[0] if isinstance(result, list) and result else []
         highlights: list[ScrapedHighlight] = []
         for hl in raw_highlights[: self.settings.highlights_to_fetch]:
             try:
@@ -339,10 +288,7 @@ class HikerInstagramScraper:
         medias_mapped = [_hiker_media_to_post(m) for m in raw_medias]
 
         # 5. Комментарии для первых N постов с включёнными комментариями
-        posts_for_comments = [
-            p for p in medias_mapped
-            if not p.comments_disabled and p.comment_count > 0
-        ][:self.settings.posts_with_comments]
+        posts_for_comments = select_posts_for_comments(medias_mapped, self.settings.posts_with_comments)
 
         for post in posts_for_comments:
             try:
@@ -352,8 +298,8 @@ class HikerInstagramScraper:
                 comments: list[ScrapedComment] = []
                 for c in (raw_comments or [])[:self.settings.comments_to_fetch]:
                     text = c.get("text", "").strip()
-                    user = c.get("user") or {}
-                    uname = user.get("username", "")
+                    comment_user = c.get("user") or {}
+                    uname = comment_user.get("username", "")
                     if text and uname:
                         comments.append(ScrapedComment(username=uname, text=text))
                 post.top_comments = comments
@@ -365,23 +311,19 @@ class HikerInstagramScraper:
 
         # Вычислить engagement_rate для всех медиа
         follower_count = user.get("follower_count", 0)
-        if follower_count > 0:
-            for p in medias_mapped:
-                p.engagement_rate = round(
-                    (p.like_count + p.comment_count) / follower_count * 100, 2
-                )
+        assign_engagement_rates(medias_mapped, follower_count)
 
         # Bio links
-        bio_links: list[dict[str, str | None]] = []
+        bio_links: list[BioLink] = []
         for link in user.get("bio_links") or []:
             if isinstance(link, dict):
                 url = link.get("url")
                 if url:
-                    bio_links.append({
-                        "url": str(url),
-                        "title": link.get("title") or None,
-                        "link_type": link.get("link_type") or None,
-                    })
+                    bio_links.append(BioLink(
+                        url=str(url),
+                        title=link.get("title") or None,
+                        link_type=link.get("link_type") or None,
+                    ))
 
         profile = ScrapedProfile(
             platform_id=user_id,

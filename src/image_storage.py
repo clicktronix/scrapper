@@ -6,15 +6,12 @@ from loguru import logger
 from supabase import Client
 
 from src.database import run_in_thread
+from src.utils import is_safe_url, is_transient_network_error
 
 IMAGES_BUCKET = "blog-images"
 DOWNLOAD_TIMEOUT = 15.0
 MAX_DOWNLOAD_SIZE = 10 * 1024 * 1024  # 10 МБ
 MAX_CONCURRENT_UPLOADS = 2  # Ограничение параллельных загрузок в Storage
-
-# Глобальный семафор — разделяется между всеми конкурентными задачами worker'а,
-# чтобы суммарное число одновременных загрузок не превышало лимит (Errno 35 EAGAIN)
-_upload_semaphore = asyncio.Semaphore(MAX_CONCURRENT_UPLOADS)
 
 
 def build_public_url(supabase_url: str, path: str) -> str:
@@ -25,6 +22,10 @@ def build_public_url(supabase_url: str, path: str) -> str:
 
 async def download_image(url: str, client: httpx.AsyncClient) -> tuple[bytes, str] | None:
     """Скачать изображение по URL. Вернуть (bytes, content_type) или None при ошибке."""
+    if not is_safe_url(url):
+        logger.warning(f"[image_storage] Небезопасный URL, пропускаем: {url}")
+        return None
+
     try:
         response = await client.get(url, timeout=DOWNLOAD_TIMEOUT, follow_redirects=True)
         response.raise_for_status()
@@ -36,6 +37,15 @@ async def download_image(url: str, client: httpx.AsyncClient) -> tuple[bytes, st
         return None
     except httpx.HTTPError as e:
         logger.warning(f"[image_storage] Ошибка скачивания {url}: {e}")
+        return None
+
+    # Ранняя проверка Content-Length (если сервер сообщает размер)
+    content_length = response.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > MAX_DOWNLOAD_SIZE:
+        logger.warning(
+            f"[image_storage] Content-Length слишком большой "
+            f"({content_length} байт): {url}"
+        )
         return None
 
     if len(response.content) > MAX_DOWNLOAD_SIZE:
@@ -58,28 +68,8 @@ UPLOAD_MAX_RETRIES = 3
 UPLOAD_RETRY_DELAY = 1.0  # секунды между попытками
 
 
-def _is_eagain(exc: BaseException) -> bool:
-    """Проверить, содержит ли исключение EAGAIN (Errno 11/35).
-
-    Supabase Storage SDK оборачивает OSError в httpx/storage3 исключения,
-    поэтому проверяем всю цепочку __cause__/__context__ и строку.
-    """
-    # Проверяем саму ошибку и всю цепочку причин
-    current: BaseException | None = exc
-    while current is not None:
-        if isinstance(current, OSError) and current.errno in (11, 35):
-            return True
-        current = current.__cause__ or current.__context__
-    # Fallback: проверка строкового представления
-    return (
-        "Errno 11" in str(exc)
-        or "Errno 35" in str(exc)
-        or "Resource temporarily unavailable" in str(exc)
-    )
-
-
 async def upload_image(db: Client, path: str, data: bytes, content_type: str) -> bool:
-    """Загрузить файл в Supabase Storage (upsert) с retry при EAGAIN."""
+    """Загрузить файл в Supabase Storage (upsert) с retry при транзиентных ошибках."""
     for attempt in range(1, UPLOAD_MAX_RETRIES + 1):
         try:
             await run_in_thread(
@@ -90,9 +80,9 @@ async def upload_image(db: Client, path: str, data: bytes, content_type: str) ->
             )
             return True
         except Exception as e:
-            if _is_eagain(e) and attempt < UPLOAD_MAX_RETRIES:
+            if is_transient_network_error(e) and attempt < UPLOAD_MAX_RETRIES:
                 logger.warning(
-                    f"[image_storage] EAGAIN при загрузке ({path}), "
+                    f"[image_storage] Транзиентная ошибка при загрузке ({path}), "
                     f"попытка {attempt}/{UPLOAD_MAX_RETRIES}, жду {UPLOAD_RETRY_DELAY}с..."
                 )
                 await asyncio.sleep(UPLOAD_RETRY_DELAY * attempt)
@@ -128,6 +118,7 @@ async def persist_profile_images(
     blog_id: str,
     avatar_cdn_url: str | None,
     posts: list[dict],
+    upload_semaphore: asyncio.Semaphore | None = None,
 ) -> tuple[str | None, dict[str, str]]:
     """
     Скачать и загрузить изображения профиля параллельно (аватар + посты).
@@ -135,13 +126,16 @@ async def persist_profile_images(
     Возвращает:
         (avatar_url, {post_platform_id: url})
     """
+    # Если семафор не передан — создаём локальный с дефолтным лимитом
+    semaphore = upload_semaphore or asyncio.Semaphore(MAX_CONCURRENT_UPLOADS)
+
     # Метаинформация для сборки результата
     task_keys: list[tuple[str, str]] = []  # (type, platform_id)
 
     async def _throttled_upload(
         client: httpx.AsyncClient, cdn_url: str, storage_path: str,
     ) -> str | None:
-        async with _upload_semaphore:
+        async with semaphore:
             return await download_and_upload_image(db, client, cdn_url, storage_path, supabase_url)
 
     tasks: list[asyncio.Task] = []
@@ -191,7 +185,7 @@ async def persist_profile_images(
 
 
 async def delete_blog_images(db: Client, blog_id: str) -> int:
-    """Удалить все изображения блога из Storage. Вернуть количество удалённых."""
+    """Удалить изображения постов блога из Storage (аватар сохраняется). Вернуть количество удалённых."""
     try:
         files = await run_in_thread(
             db.storage.from_(IMAGES_BUCKET).list, blog_id
@@ -203,14 +197,24 @@ async def delete_blog_images(db: Client, blog_id: str) -> int:
     if not files:
         return 0
 
-    paths = [f"{blog_id}/{f['name']}" for f in files]
+    # Аватар сохраняем — удаляем только посты
+    post_paths = [f"{blog_id}/{f['name']}" for f in files if f["name"] != "avatar.jpg"]
+    if not post_paths:
+        return 0
 
     try:
         await run_in_thread(
-            db.storage.from_(IMAGES_BUCKET).remove, paths
+            db.storage.from_(IMAGES_BUCKET).remove, post_paths
         )
-        logger.debug(f"[image_storage] Удалено {len(paths)} файлов для blog={blog_id}")
-        return len(paths)
+        # Обнуляем thumbnail_url у постов, чтобы при rescrape загрузились новые
+        await run_in_thread(
+            db.table("blog_posts")
+            .update({"thumbnail_url": None})
+            .eq("blog_id", blog_id)
+            .execute
+        )
+        logger.debug(f"[image_storage] Удалено {len(post_paths)} файлов постов для blog={blog_id}")
+        return len(post_paths)
     except Exception as e:
         logger.error(f"[image_storage] Ошибка удаления файлов для blog={blog_id}: {e}")
         return 0

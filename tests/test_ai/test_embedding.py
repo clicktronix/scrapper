@@ -29,9 +29,11 @@ class TestBuildEmbeddingText:
                 "secondary_topics": ["Рецепты", "ПП и диеты"],
             },
             audience_inference={
-                "audience_male_pct": 20,
-                "audience_female_pct": 75,
-                "audience_other_pct": 5,
+                "gender": {
+                    "male_pct": 20,
+                    "female_pct": 75,
+                    "other_pct": 5,
+                },
                 "estimated_audience_age": "25-34",
                 "estimated_audience_geo": "kz",
                 "audience_interests": ["кулинария", "ЗОЖ"],
@@ -55,14 +57,13 @@ class TestBuildEmbeddingText:
         assert "reels" in text
 
     def test_empty_insights_embedding_text(self) -> None:
-        """Пустой AIInsights -> минимальный текст без ошибок."""
+        """Пустой AIInsights -> None (нет данных для embedding)."""
         from src.ai.embedding import build_embedding_text
 
         insights = AIInsights()
         text = build_embedding_text(insights)
 
-        assert isinstance(text, str)
-        assert len(text) > 0
+        assert text is None
 
     def test_embedding_text_includes_audience(self) -> None:
         """Текст включает данные об аудитории."""
@@ -70,9 +71,11 @@ class TestBuildEmbeddingText:
 
         insights = AIInsights(
             audience_inference={
-                "audience_male_pct": 15,
-                "audience_female_pct": 80,
-                "audience_other_pct": 5,
+                "gender": {
+                    "male_pct": 15,
+                    "female_pct": 80,
+                    "other_pct": 5,
+                },
                 "audience_interests": ["красота", "мода"],
             },
         )
@@ -157,7 +160,8 @@ class TestEmbeddingQualityFields:
 
         insights = AIInsights()
         text = build_embedding_text(insights)
-        assert "Характеристики" not in text
+        # Пустой AIInsights возвращает None
+        assert text is None
 
 
 class TestGenerateEmbedding:

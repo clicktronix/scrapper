@@ -61,9 +61,9 @@ class TestRunInThread:
 
     def test_transient_network_error_linux_errno_11(self) -> None:
         """Linux errno=11 (EAGAIN) должен считаться транзиентным."""
-        from src.database import _is_transient_network_error
+        from src.utils import is_transient_network_error
 
-        assert _is_transient_network_error(OSError(11, "Resource temporarily unavailable"))
+        assert is_transient_network_error(OSError(11, "Resource temporarily unavailable"))
 
 
 class TestIsBlogFresh:
@@ -765,3 +765,55 @@ class TestUpsertPostsMutation:
         await upsert_highlights(db, "blog-1", highlights)
 
         assert "blog_id" not in highlights[0]
+
+
+class TestCleanupOrphanPerson:
+    """Тесты cleanup_orphan_person."""
+
+    async def test_deletes_person_without_blogs(self) -> None:
+        """Person без блогов удаляется."""
+        from src.database import cleanup_orphan_person
+
+        db = _mock_supabase()
+        # select возвращает пустой результат (нет блогов)
+        chain = db.table.return_value.select.return_value.eq.return_value
+        chain.limit.return_value.execute.return_value = MagicMock(data=[])
+
+        await cleanup_orphan_person(db, "person-123")
+
+        # delete должен быть вызван
+        db.table.return_value.delete.assert_called_once()
+
+    async def test_keeps_person_with_blogs(self) -> None:
+        """Person с блогами НЕ удаляется."""
+        from src.database import cleanup_orphan_person
+
+        db = _mock_supabase()
+        chain = db.table.return_value.select.return_value.eq.return_value
+        chain.limit.return_value.execute.return_value = MagicMock(
+            data=[{"id": "blog-1"}]
+        )
+
+        await cleanup_orphan_person(db, "person-123")
+
+        # delete НЕ должен вызываться
+        db.table.return_value.delete.assert_not_called()
+
+    async def test_exception_logged_not_raised(self) -> None:
+        """Ошибка при cleanup логируется через logger.warning, не пробрасывается."""
+        from src.database import cleanup_orphan_person
+
+        db = _mock_supabase()
+
+        with (
+            patch("src.database.run_in_thread", new_callable=AsyncMock, side_effect=RuntimeError("DB error")),
+            patch("src.database.logger") as mock_logger,
+        ):
+            # Не должна пробрасывать исключение
+            await cleanup_orphan_person(db, "person-456")
+
+            # logger.warning вызван с информацией об ошибке
+            mock_logger.warning.assert_called_once()
+            call_msg = mock_logger.warning.call_args[0][0]
+            assert "person-456" in call_msg
+            assert "DB error" in call_msg

@@ -1,5 +1,6 @@
 """Основной цикл воркера — polling + обработка задач."""
 import asyncio
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from loguru import logger
@@ -9,7 +10,59 @@ from supabase import Client
 from src.config import Settings
 from src.database import fetch_pending_tasks, mark_task_failed
 from src.platforms.base import BaseScraper
-from src.worker.handlers import handle_ai_analysis, handle_discover, handle_full_scrape
+from src.worker.handlers import (
+    handle_ai_analysis,
+    handle_discover,
+    handle_full_scrape,
+)
+
+# Тип handler-функции для type safety
+type TaskHandler = Callable[..., Coroutine[Any, Any, None]]
+
+# Зависимости task_type → какие внешние сервисы нужны для обработчика.
+# "scraper" — BaseScraper (instagram), "openai" — AsyncOpenAI.
+TASK_DEPS: dict[str, list[str]] = {
+    "full_scrape": ["scraper"],
+    "ai_analysis": ["openai"],
+    "discover": ["scraper"],
+}
+
+
+def _resolve_handler(task_type: str) -> TaskHandler | None:
+    """Dispatch table: task_type → handler-функция.
+
+    Dict строится при каждом вызове, поэтому mock.patch на module-level
+    имена (handle_full_scrape и т.д.) корректно подменяет handlers.
+    """
+    dispatch: dict[str, TaskHandler] = {
+        "full_scrape": handle_full_scrape,
+        "ai_analysis": handle_ai_analysis,
+        "discover": handle_discover,
+    }
+    return dispatch.get(task_type)
+
+
+async def _get_scraper(
+    scrapers: dict[str, BaseScraper],
+    db: Client,
+    task_id: str,
+    attempts: int,
+    max_attempts: int,
+    task_type: str,
+) -> BaseScraper | None:
+    """Получить скрапер для instagram; при отсутствии — пометить задачу failed."""
+    scraper = scrapers.get("instagram")
+    if scraper is None:
+        logger.error(f"No scraper for {task_type} task {task_id}")
+        await mark_task_failed(
+            db,
+            task_id,
+            attempts,
+            max_attempts,
+            f"No scraper configured for {task_type} task",
+            retry=False,
+        )
+    return scraper
 
 
 async def process_task(
@@ -30,41 +83,9 @@ async def process_task(
                      f"attempts={attempts}/{max_attempts}")
 
         try:
-            if task_type == "full_scrape":
-                # Определяем платформу (по умолчанию instagram)
-                scraper = scrapers.get("instagram")
-                if scraper is None:
-                    logger.error(f"No scraper for task {task_id}")
-                    await mark_task_failed(
-                        db,
-                        task_id,
-                        attempts,
-                        max_attempts,
-                        "No scraper configured for platform 'instagram'",
-                        retry=False,
-                    )
-                    return
-                await handle_full_scrape(db, task, scraper, settings)
-
-            elif task_type == "ai_analysis":
-                await handle_ai_analysis(db, task, openai_client, settings)
-
-            elif task_type == "discover":
-                scraper = scrapers.get("instagram")
-                if scraper is None:
-                    logger.error(f"No scraper for discover task {task_id}")
-                    await mark_task_failed(
-                        db,
-                        task_id,
-                        attempts,
-                        max_attempts,
-                        "No scraper configured for discover task",
-                        retry=False,
-                    )
-                    return
-                await handle_discover(db, task, scraper, settings)
-
-            else:
+            # Поиск обработчика
+            handler = _resolve_handler(task_type)
+            if handler is None:
                 logger.warning(f"Unknown task type: {task_type}")
                 await mark_task_failed(
                     db,
@@ -74,6 +95,30 @@ async def process_task(
                     f"Unknown task type: {task_type}",
                     retry=False,
                 )
+                return
+
+            required_deps = TASK_DEPS.get(task_type, [])
+
+            # Резолв зависимостей для конкретного handler
+            resolved: dict[str, Any] = {}
+            for dep_key in required_deps:
+                if dep_key == "scraper":
+                    scraper = await _get_scraper(
+                        scrapers, db, task_id, attempts, max_attempts, task_type,
+                    )
+                    if scraper is None:
+                        return
+                    resolved["scraper"] = scraper
+                elif dep_key == "openai":
+                    resolved["openai"] = openai_client
+
+            # Вызов handler с нужными аргументами
+            if "scraper" in resolved:
+                await handler(db, task, resolved["scraper"], settings)
+            elif "openai" in resolved:
+                await handler(db, task, resolved["openai"], settings)
+            else:
+                await handler(db, task, settings)
 
         except Exception as e:
             logger.exception(f"Unhandled error in task {task_id}: {e}")

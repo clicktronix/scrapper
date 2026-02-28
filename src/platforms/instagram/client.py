@@ -23,6 +23,7 @@ from loguru import logger
 from supabase import Client as SupabaseClient
 
 from src.config import Settings
+from src.database import sanitize_error
 from src.platforms.instagram.exceptions import (
     AllAccountsCooldownError,
     ScraperError,
@@ -99,7 +100,7 @@ def _generate_device_for_account(account_name: str) -> dict[str, str | int]:
 
     Один аккаунт = одно устройство навсегда (хеш имени → индекс).
     """
-    idx = int(hashlib.md5(account_name.encode()).hexdigest(), 16) % len(_DEVICE_POOL)
+    idx = int(hashlib.md5(account_name.encode(), usedforsecurity=False).hexdigest(), 16) % len(_DEVICE_POOL)
     device = dict(_DEVICE_POOL[idx])
     device.setdefault("app_version", "269.0.0.18.75")
     device.setdefault("version_code", "314665256")
@@ -121,6 +122,13 @@ class AccountState:
     requests_this_hour: int = 0
     hour_started_at: float = field(default_factory=time.time)
 
+    def __repr__(self) -> str:
+        return (
+            f"AccountState(name={self.name!r}, username={self.username!r}, "
+            f"password='***', totp_seed='***', is_available={self.is_available}, "
+            f"requests_this_hour={self.requests_this_hour})"
+        )
+
 
 class AccountPool:
     """
@@ -135,11 +143,13 @@ class AccountPool:
         accounts: list[AccountState],
         requests_per_hour: int = 30,
         cooldown_minutes: int = 45,
+        db: SupabaseClient | None = None,
     ) -> None:
         self.accounts = accounts
         self.current_index = 0
         self.requests_per_hour = requests_per_hour
         self.cooldown_minutes = cooldown_minutes
+        self._db = db
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -225,7 +235,8 @@ class AccountPool:
                 ))
                 logger.info(f"Account {cred.name}: initialized successfully")
             except Exception as e:
-                logger.error(f"Account {cred.name}: login failed ({type(e).__name__}: {e}), skipping")
+                err = sanitize_error(str(e))
+                logger.error(f"Account {cred.name}: login failed ({type(e).__name__}: {err}), skipping")
 
         if not accounts:
             logger.warning("No Instagram accounts initialized")
@@ -235,6 +246,7 @@ class AccountPool:
             accounts=accounts,
             requests_per_hour=settings.requests_per_hour,
             cooldown_minutes=settings.cooldown_minutes,
+            db=db,
         )
 
     def get_available_account(self) -> AccountState | None:
@@ -297,6 +309,12 @@ class AccountPool:
                 account.username, account.password, account.totp_seed,
             )
             logger.info(f"Account {account.name}: re-login successful")
+            # Сохранить обновлённую сессию после re-login
+            if self._db is not None:
+                try:
+                    await save_session(self._db, account.name, account.client.get_settings())
+                except Exception as e:
+                    logger.warning(f"Account {account.name}: failed to save session after re-login: {e}")
             return True
         except Exception as e:
             logger.error(f"Account {account.name}: re-login failed: {e}")
@@ -365,10 +383,13 @@ class AccountPool:
                     continue
                 # После re-login повторяем тот же запрос
                 try:
+                    async with self._lock:
+                        self.increment_requests(acc)
                     result = await asyncio.to_thread(func, acc.client, *args, **kwargs)
                     await asyncio.sleep(random.uniform(2, 5))
                     return result
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"[pool] Запрос после re-login на {acc.name} упал: {e}")
                     async with self._lock:
                         self.mark_rate_limited(acc)
                     continue
@@ -379,10 +400,13 @@ class AccountPool:
                     if not success:
                         continue
                     try:
+                        async with self._lock:
+                            self.increment_requests(acc)
                         result = await asyncio.to_thread(func, acc.client, *args, **kwargs)
                         await asyncio.sleep(random.uniform(2, 5))
                         return result
-                    except Exception:
+                    except Exception as e2:
+                        logger.warning(f"[pool] Запрос после re-login на {acc.name} упал: {e2}")
                         async with self._lock:
                             self.mark_rate_limited(acc)
                         continue

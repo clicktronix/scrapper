@@ -84,22 +84,23 @@ _BASE_PROMPT = """\
 ОПРЕДЕЛЕНИЕ ambassador_brands:
 - Бренды, у которых блогер является амбассадором (долгосрочное сотрудничество).
 
-ОПРЕДЕЛЕНИЕ audience_male_pct / audience_female_pct / audience_other_pct:
+ОПРЕДЕЛЕНИЕ audience_inference.gender (male_pct / female_pct / other_pct):
+- Заполняй объект gender с полями male_pct, female_pct, other_pct.
 - Оцени процентное распределение аудитории по полу (0-100, сумма = 100).
 - Если аудитория преимущественно женская (beauty, мама-блог) — типично 70-85% female.
 - Если контент нейтральный — 50/50. Если мужской (tech, авто, спорт) — 60-80% male.
 - other_pct — для неопределённого пола, обычно 0-5%.
 
-ОПРЕДЕЛЕНИЕ audience_age_*_pct:
-(audience_age_13_17_pct, audience_age_18_24_pct, audience_age_25_34_pct,
-audience_age_35_44_pct, audience_age_45_plus_pct)
+ОПРЕДЕЛЕНИЕ audience_inference.age (pct_13_17 / pct_18_24 / pct_25_34 / pct_35_44 / pct_45_plus):
+- Заполняй объект age с полями pct_13_17, pct_18_24, pct_25_34, pct_35_44, pct_45_plus.
 - Распредели аудиторию по возрастным группам В ПРОЦЕНТАХ (0-100). Сумма всех групп = 100.
 - Определяй по контенту, стилю комментариев, тематике, самому блогеру.
 - Пример beauty-блогер 25 лет: 13-17=10, 18-24=40, 25-34=35, 35-44=10, 45+=5.
 - Пример мама-блог 35 лет: 13-17=0, 18-24=10, 25-34=35, 35-44=40, 45+=15.
 - ЗАПОЛНЯЙ ОБЯЗАТЕЛЬНО — не оставляй null.
 
-ОПРЕДЕЛЕНИЕ audience_kz_pct / audience_ru_pct / audience_uz_pct / audience_other_geo_pct:
+ОПРЕДЕЛЕНИЕ audience_inference.geo (kz_pct / ru_pct / uz_pct / other_geo_pct):
+- Заполняй объект geo с полями kz_pct, ru_pct, uz_pct, other_geo_pct.
 - Распредели аудиторию по странам В ПРОЦЕНТАХ (0-100). Сумма = 100.
 - Определяй по языку постов, геотегам, упоминаниям городов, комментариям.
 - Если блогер из Казахстана и пишет на русском: типично kz=60-80, ru=15-30, uz=0-5, other=5-10.
@@ -218,7 +219,7 @@ def build_analysis_prompt(
         text_parts.append(f"External URL: {profile.external_url}")
     if profile.bio_links:
         bio_links_str = ", ".join(
-            f"{bl.get('url', '')}" + (f" ({bl['title']})" if bl.get("title") else "")
+            f"{bl.url}" + (f" ({bl.title})" if bl.title else "")
             for bl in profile.bio_links
         )
         text_parts.append(f"Bio links: {bio_links_str}")
@@ -391,21 +392,12 @@ def build_analysis_prompt(
         {"type": "text", "text": "\n".join(text_parts)}
     ]
 
-    # Изображения — аватар + 1 ER-топ пост (high) + остальные превью (low)
+    # Изображения — все low detail для экономии токенов
     max_images = MAX_IMAGES
     image_count = 0
-    top_post_thumbnail_url: str | None = None
 
-    def _resolve_post_er(post: Any) -> float:
-        """Вернуть ER поста для выбора самого значимого изображения."""
-        if post.engagement_rate is not None:
-            return float(post.engagement_rate)
-        if profile.follower_count > 0:
-            return (post.like_count + post.comment_count) / profile.follower_count * 100
-        return -1.0
-
-    def _add_image(url: str, detail: str = "low") -> bool:
-        """Добавить изображение в content. Возвращает True при успехе."""
+    def _add_image(url: str) -> bool:
+        """Добавить изображение (low detail) в content. Возвращает True при успехе."""
         nonlocal image_count
         if image_count >= max_images:
             return False
@@ -420,24 +412,16 @@ def build_analysis_prompt(
             image_url = url
         content.append({
             "type": "image_url",
-            "image_url": {"url": image_url, "detail": detail},
+            "image_url": {"url": image_url, "detail": "low"},
         })
         image_count += 1
         return True
 
-    posts_with_thumbnail = [post for post in profile.medias if post.thumbnail_url]
-    if posts_with_thumbnail:
-        top_post = max(posts_with_thumbnail, key=_resolve_post_er)
-        top_post_thumbnail_url = top_post.thumbnail_url
-
     if profile.profile_pic_url:
         _add_image(profile.profile_pic_url)
 
-    if top_post_thumbnail_url:
-        _add_image(top_post_thumbnail_url, detail="high")
-
     for post in profile.medias:
-        if post.thumbnail_url and post.thumbnail_url != top_post_thumbnail_url:
+        if post.thumbnail_url:
             _add_image(post.thumbnail_url)
 
     return [

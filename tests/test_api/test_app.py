@@ -11,7 +11,7 @@ class TestHealth:
 
     def test_health_no_auth_required(self) -> None:
         app = make_app()
-        with patch("src.api.app.run_in_thread") as mock_run:
+        with patch("src.api.services.run_in_thread") as mock_run:
             mock_run.return_value = MagicMock(count=5)
             client = TestClient(app)
             resp = client.get("/api/health")
@@ -24,7 +24,7 @@ class TestHealth:
     def test_health_shows_available_accounts(self) -> None:
         pool = make_pool(total=3, available=2)
         app = make_app(pool=pool)
-        with patch("src.api.app.run_in_thread") as mock_run:
+        with patch("src.api.services.run_in_thread") as mock_run:
             mock_run.return_value = MagicMock(count=0)
             client = TestClient(app)
             resp = client.get("/api/health")
@@ -36,7 +36,7 @@ class TestHealth:
     def test_health_db_error_returns_minus_one(self) -> None:
         """При ошибке БД — статус degraded и HTTP 503."""
         app = make_app()
-        with patch("src.api.app.run_in_thread", side_effect=Exception("DB down")):
+        with patch("src.api.services.run_in_thread", side_effect=Exception("DB down")):
             client = TestClient(app)
             resp = client.get("/api/health")
 

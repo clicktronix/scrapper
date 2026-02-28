@@ -67,6 +67,24 @@ def calculate_posts_per_week(posts: list[ScrapedPost]) -> float | None:
     return round(len(posts) / (days / 7), 2)
 
 
+def assign_engagement_rates(posts: list[ScrapedPost], follower_count: int) -> None:
+    """Рассчитать и присвоить engagement_rate каждому посту in-place."""
+    if follower_count <= 0:
+        return
+    for p in posts:
+        p.engagement_rate = round(
+            (p.like_count + p.comment_count) / follower_count * 100, 2
+        )
+
+
+def select_posts_for_comments(posts: list[ScrapedPost], limit: int) -> list[ScrapedPost]:
+    """Выбрать первые N постов с включёнными комментариями для загрузки."""
+    return [
+        p for p in posts
+        if not p.comments_disabled and p.comment_count > 0
+    ][:limit]
+
+
 def extract_hashtags(text: str) -> list[str]:
     """Извлечь хештеги из caption. Поддерживает кириллицу."""
     return re.findall(r"#[а-яА-ЯёЁa-zA-Z0-9_]+", text)

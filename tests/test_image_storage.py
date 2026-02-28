@@ -147,9 +147,9 @@ class TestEagainDetection:
     """Тесты распознавания EAGAIN-ошибок."""
 
     def test_linux_errno_11_is_recognized(self) -> None:
-        from src.image_storage import _is_eagain
+        from src.utils import is_transient_network_error
 
-        assert _is_eagain(OSError(11, "Resource temporarily unavailable"))
+        assert is_transient_network_error(OSError(11, "Resource temporarily unavailable"))
 
 
 class TestDownloadAndUploadImage:
@@ -318,15 +318,16 @@ class TestDeleteBlogImages:
         from src.image_storage import delete_blog_images
 
         mock_db = MagicMock()
+        # avatar.jpg пропускается — удаляется только post_p1.jpg
         files = [{"name": "avatar.jpg"}, {"name": "post_p1.jpg"}]
 
         with patch("src.image_storage.run_in_thread", new_callable=AsyncMock) as mock_run:
-            # list → files, remove → OK
-            mock_run.side_effect = [files, None]
+            # list → files, remove → OK, update thumbnail_url → OK
+            mock_run.side_effect = [files, None, MagicMock()]
 
             result = await delete_blog_images(mock_db, "blog-1")
-            assert result == 2
-            assert mock_run.call_count == 2
+            assert result == 1  # только post, без avatar
+            assert mock_run.call_count == 3  # list + remove + update thumbnail_url
 
     @pytest.mark.asyncio
     async def test_empty_folder(self) -> None:

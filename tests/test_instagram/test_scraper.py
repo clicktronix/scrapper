@@ -646,7 +646,7 @@ class TestScrapeProfileBioLinksEdge:
 
         # broken_link пропущен, good_link включён
         assert len(profile.bio_links) == 1
-        assert profile.bio_links[0]["url"] == "https://example.com"
+        assert profile.bio_links[0].url == "https://example.com"
 
 
 class TestDiscoverEdgeCases:
@@ -1179,8 +1179,10 @@ class TestScrapeProfileNewFields:
         profile = await scraper.scrape_profile("testuser")
 
         assert len(profile.bio_links) == 2
-        assert profile.bio_links[0] == {"url": "https://t.me/channel", "title": "Telegram", "link_type": None}
-        assert profile.bio_links[1] == {"url": "https://wa.me/777", "title": None, "link_type": "external"}
+        assert profile.bio_links[0].url == "https://t.me/channel"
+        assert profile.bio_links[0].title == "Telegram"
+        assert profile.bio_links[1].url == "https://wa.me/777"
+        assert profile.bio_links[1].link_type == "external"
 
 
 class TestDiscoverNewFields:

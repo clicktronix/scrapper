@@ -62,7 +62,7 @@ class TestSettings:
         from src.config import Settings
 
         s = Settings()
-        assert s.instagram_accounts_list == ["acc1", "acc2", "acc3"]
+        assert s.instagram_accounts == "acc1,acc2,acc3"
 
     def test_default_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Дефолтные значения для необязательных полей."""
@@ -88,7 +88,7 @@ class TestSettings:
         assert s.worker_poll_interval == 30
         assert s.worker_max_concurrent == 2
         assert s.log_level == "INFO"
-        assert s.instagram_accounts_list == []
+        assert s.instagram_accounts == ""
 
     def test_extra_env_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Неизвестные переменные не ломают Settings (extra='ignore')."""

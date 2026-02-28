@@ -15,16 +15,20 @@ def _mock_supabase():
     return db
 
 
+_LEVEL_NO = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
+
+
 def _make_message(level_name: str, module: str = "src.worker", text: str = "test msg"):
     """Создать мок loguru message с record."""
     message = MagicMock()
+    level_mock = MagicMock()
+    level_mock.name = level_name
+    level_mock.no = _LEVEL_NO.get(level_name, 0)
     message.record = {
-        "level": MagicMock(name=level_name),
+        "level": level_mock,
         "name": module,
         "message": text,
     }
-    # loguru level.name — property, MagicMock(name=...) не работает как .name
-    message.record["level"].name = level_name
     return message
 
 
@@ -75,9 +79,19 @@ class TestSupabaseSink:
         db = _mock_supabase()
         sink = create_supabase_sink(db)
 
-        sink(_make_message("WARNING", "src.ai.batch", "Batch timeout exceeded"))
+        sink(_make_message("WARNING", "src.ai.batch_api", "Batch timeout exceeded"))
 
         call_args = db.table.return_value.insert.call_args[0][0]
         assert call_args["level"] == "WARNING"
-        assert call_args["module"] == "src.ai.batch"
+        assert call_args["module"] == "src.ai.batch_api"
         assert call_args["message"] == "Batch timeout exceeded"
+
+    def test_sink_skips_debug_and_info(self) -> None:
+        """Sink пропускает уровни ниже WARNING (DEBUG, INFO)."""
+        db = _mock_supabase()
+        sink = create_supabase_sink(db)
+
+        sink(_make_message("DEBUG", "src.worker", "debug msg"))
+        sink(_make_message("INFO", "src.worker", "info msg"))
+
+        db.table.return_value.insert.assert_not_called()

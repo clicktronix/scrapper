@@ -2,17 +2,22 @@
 
 from supabase import Client
 
+from src.database import sanitize_error
+
 
 def create_supabase_sink(db: Client):
     """Фабрика: вернуть sink-функцию, привязанную к db-клиенту."""
 
     def sink(message) -> None:
         record = message.record
+        if record["level"].no < 30:  # WARNING = 30
+            return
         try:
+            sanitized_msg = sanitize_error(str(record["message"]))
             db.table("scrape_logs").insert({
                 "level": record["level"].name,
                 "module": record["name"],
-                "message": str(record["message"]),
+                "message": sanitized_msg,
             }).execute()
         except Exception:
             pass  # Ошибка логирования не должна ронять приложение

@@ -12,12 +12,20 @@ class ScrapedComment(BaseModel):
     text: str
 
 
+class BioLink(BaseModel):
+    """Ссылка из био профиля."""
+
+    url: str
+    title: str | None = None
+    link_type: str | None = None
+
+
 class ScrapedPost(BaseModel):
     """Пост или рилс из Instagram."""
 
     platform_id: str
     shortcode: str | None = None
-    media_type: int  # 1=фото, 2=видео, 8=альбом
+    media_type: Literal[1, 2, 8]  # 1=фото, 2=видео, 8=альбом
     product_type: str | None = None  # feed, clips, igtv
     caption_text: str = ""
     hashtags: list[str] = []
@@ -74,7 +82,7 @@ class ScrapedProfile(BaseModel):
     # Профиль
     biography: str = ""
     external_url: str | None = None
-    bio_links: list[dict[str, str | None]] = []  # [{url, title, link_type}]
+    bio_links: list[BioLink] = []
 
     # Метрики
     follower_count: int = 0

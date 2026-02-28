@@ -44,11 +44,11 @@ async def main() -> None:
 
     # Выбор бэкенда скрапера
     pool = None
-    if settings.scraper_backend == "hikerapi" and settings.hikerapi_token:
+    if settings.scraper_backend == "hikerapi" and settings.hikerapi_token.get_secret_value():
         from src.platforms.instagram.hiker_scraper import HikerInstagramScraper
 
         scrapers: dict[str, BaseScraper] = {
-            "instagram": HikerInstagramScraper(settings.hikerapi_token, settings),
+            "instagram": HikerInstagramScraper(settings.hikerapi_token.get_secret_value(), settings),
         }
         logger.info("Using HikerAPI backend")
     else:
@@ -77,10 +77,22 @@ async def main() -> None:
 
     logger.info(f"API server starting on port {settings.scraper_port}")
 
+    async def _run_with_shutdown(coro, shutdown_ev, name: str):
+        """Запускает корутину, при ошибке сигнализирует shutdown."""
+        try:
+            await coro
+        except Exception:
+            logger.exception(f"[main] {name} упал, инициируем shutdown")
+            shutdown_ev.set()
+            raise
+
     try:
+        worker_coro = run_worker(
+            db, scrapers, settings, shutdown_event, openai_client,
+        )
         await asyncio.gather(
-            server.serve(),
-            run_worker(db, scrapers, settings, shutdown_event, openai_client),
+            _run_with_shutdown(server.serve(), shutdown_event, "server"),
+            _run_with_shutdown(worker_coro, shutdown_event, "worker"),
         )
     finally:
         scheduler.shutdown(wait=False)

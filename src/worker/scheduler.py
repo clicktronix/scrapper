@@ -2,24 +2,22 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import openai
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
 from openai import AsyncOpenAI
 from supabase import Client
 
-from src.ai.batch import (
-    is_valid_city,
-    load_categories,
-    load_cities,
-    load_tags,
-    match_categories,
-    match_city,
-    match_tags,
-    normalize_lookup_key,
-)
 from src.ai.embedding import build_embedding_text, generate_embedding
 from src.ai.schemas import AIInsights
 from src.ai.taxonomy import CATEGORIES, TAGS
+from src.ai.taxonomy_matching import (
+    load_categories,
+    load_tags,
+    match_categories,
+    match_tags,
+    normalize_lookup_key,
+)
 from src.config import Settings
 from src.database import (
     create_task_if_not_exists,
@@ -140,6 +138,7 @@ async def cleanup_old_images(db: Client, settings: Settings) -> None:
         db.table("blogs")
         .select("id")
         .lt("scraped_at", threshold)
+        .not_.in_("scrape_status", ["scraping", "pending"])
         .limit(100)
         .execute
     )
@@ -177,12 +176,18 @@ async def retry_missing_embeddings(
         try:
             insights = AIInsights.model_validate(blog["ai_insights"])
             text = build_embedding_text(insights)
+            if text is None:
+                logger.warning(f"[retry_embedding] Blog {blog['id']}: пустой текст для embedding, пропускаем")
+                continue
             vector = await generate_embedding(openai_client, text)
             if vector:
                 await run_in_thread(
                     db.table("blogs").update({"embedding": vector}).eq("id", blog["id"]).execute
                 )
                 regenerated += 1
+        except openai.RateLimitError:
+            logger.warning("[retry_embedding] Rate limited, stopping batch")
+            break
         except Exception as e:
             logger.error(f"[retry_embedding] Blog {blog['id']}: {e}")
 
@@ -203,12 +208,21 @@ async def retry_taxonomy_mappings(db: Client) -> None:
     if not result.data:
         return
 
+    # Исключаем блоги, у которых уже есть записи в blog_categories
+    blog_ids = [b["id"] for b in result.data]
+    existing_cats = await run_in_thread(
+        db.table("blog_categories").select("blog_id").in_("blog_id", blog_ids).execute
+    )
+    already_matched = {r["blog_id"] for r in existing_cats.data}
+
     categories_cache = await load_categories(db)
     tags_cache = await load_tags(db)
 
     processed = 0
     errors = 0
     for blog in result.data:
+        if blog["id"] in already_matched:
+            continue
         blog_id = blog["id"]
         try:
             insights = AIInsights.model_validate(blog["ai_insights"])
@@ -257,48 +271,6 @@ async def audit_taxonomy_drift(db: Client) -> None:
         )
     if not missing_categories and not missing_tags:
         logger.info("[taxonomy_audit] Prompt taxonomy fully aligned with DB")
-
-
-async def backfill_city_matching(db: Client) -> None:
-    """Сопоставить города для блогов у которых есть city но нет blog_cities."""
-    # Найти блоги с AI-анализом, у которых city заполнен
-    blogs = await run_in_thread(
-        db.table("blogs")
-        .select("id, ai_insights")
-        .eq("scrape_status", "ai_analyzed")
-        .not_.is_("ai_insights", "null")
-        .limit(500)
-        .execute
-    )
-    if not blogs.data:
-        return
-
-    # Проверить какие уже имеют blog_cities
-    blog_ids = [b["id"] for b in blogs.data]
-    existing = await run_in_thread(
-        db.table("blog_cities").select("blog_id").in_("blog_id", blog_ids).execute
-    )
-    has_city = {r["blog_id"] for r in existing.data}
-
-    cities_cache = await load_cities(db)
-    matched = 0
-    for blog in blogs.data:
-        if blog["id"] in has_city:
-            continue
-        ai = blog.get("ai_insights") or {}
-        bp = ai.get("blogger_profile") or {}
-        city_name = bp.get("city")
-        if not city_name or not is_valid_city(city_name):
-            continue
-        try:
-            ok = await match_city(db, blog["id"], city_name, cities_cache)
-            if ok:
-                matched += 1
-        except Exception as e:
-            logger.error(f"[backfill_city] Blog {blog['id']}: {e}")
-
-    if matched:
-        logger.info(f"[backfill_city] Matched {matched} cities from {len(blogs.data)} blogs")
 
 
 async def recover_tasks(db: Client) -> None:
@@ -384,14 +356,6 @@ def create_scheduler(
         minutes=10,
         kwargs={"db": db},
         id="recover_tasks",
-    )
-
-    # Однократный запуск — бэкфилл города для существующих блогов
-    scheduler.add_job(
-        backfill_city_matching,
-        "date",
-        kwargs={"db": db},
-        id="backfill_city_matching",
     )
 
     # Еженедельно в воскресенье 4:00 — очистка старых изображений

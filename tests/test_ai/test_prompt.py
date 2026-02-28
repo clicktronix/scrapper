@@ -89,9 +89,8 @@ class TestBuildAnalysisPrompt:
         # 1 avatar + 2 medias = 3
         assert len(image_parts) == 3
         details = [p["image_url"]["detail"] for p in image_parts]
-        # Один самый ER-значимый пост отправляется как high, остальные low
-        assert details.count("high") == 1
-        assert details.count("low") == 2
+        # Все изображения low detail для экономии токенов
+        assert details.count("low") == 3
 
     def test_includes_highlights(self) -> None:
         from src.ai.prompt import build_analysis_prompt
@@ -493,14 +492,14 @@ class TestBuildAnalysisPromptNewFields:
     def test_bio_links_new_format_with_title(self) -> None:
         """bio_links в новом формате с title."""
         from src.ai.prompt import build_analysis_prompt
-        from src.models.blog import ScrapedProfile
+        from src.models.blog import BioLink, ScrapedProfile
 
         profile = ScrapedProfile(
             platform_id="12345",
             username="bltest",
             bio_links=[
-                {"url": "https://t.me/ch", "title": "Telegram", "link_type": None},
-                {"url": "https://wa.me/77", "title": None, "link_type": None},
+                BioLink(url="https://t.me/ch", title="Telegram", link_type=None),
+                BioLink(url="https://wa.me/77", title=None, link_type=None),
             ],
         )
         messages = build_analysis_prompt(profile)
@@ -712,8 +711,7 @@ class TestBuildAnalysisPromptImageMap:
         assert urls[1] == "data:image/jpeg;base64,post1_data"
         assert urls[2] == "data:image/jpeg;base64,reel1_data"
         details = [p["image_url"]["detail"] for p in image_parts]
-        assert details.count("high") == 1
-        assert details.count("low") == 2
+        assert details.count("low") == 3
 
     def test_image_map_missing_url_skipped(self) -> None:
         """URL не в image_map → изображение пропускается."""
@@ -795,7 +793,7 @@ class TestBuildAnalysisPromptImageMap:
         image_parts = [p for p in messages[1]["content"] if p["type"] == "image_url"]
         detail_by_url = {p["image_url"]["url"]: p["image_url"]["detail"] for p in image_parts}
 
-        assert detail_by_url["https://example.com/high.jpg"] == "high"
+        assert detail_by_url["https://example.com/high.jpg"] == "low"
         assert detail_by_url["https://example.com/low.jpg"] == "low"
         assert detail_by_url["https://example.com/avatar.jpg"] == "low"
 
@@ -1090,9 +1088,9 @@ class TestPromptAgePctInstructions:
     """Тесты: промпт содержит инструкции для возрастных процентов аудитории."""
 
     def test_age_pct_instructions_present(self) -> None:
-        """Промпт содержит 'audience_age_*_pct' и 'ЗАПОЛНЯЙ ОБЯЗАТЕЛЬНО'."""
+        """Промпт содержит 'pct_13_17' и 'ЗАПОЛНЯЙ ОБЯЗАТЕЛЬНО'."""
         from src.ai.prompt import SYSTEM_PROMPT
-        assert "audience_age_*_pct" in SYSTEM_PROMPT
+        assert "pct_13_17" in SYSTEM_PROMPT
         assert "ЗАПОЛНЯЙ ОБЯЗАТЕЛЬНО" in SYSTEM_PROMPT
 
     def test_age_group_examples(self) -> None:
@@ -1111,9 +1109,9 @@ class TestPromptGeoPctInstructions:
     """Тесты: промпт содержит инструкции для географических процентов аудитории."""
 
     def test_geo_pct_instructions_present(self) -> None:
-        """Промпт содержит 'audience_kz_pct' и 'Сумма = 100'."""
+        """Промпт содержит 'kz_pct' и 'Сумма = 100'."""
         from src.ai.prompt import SYSTEM_PROMPT
-        assert "audience_kz_pct" in SYSTEM_PROMPT
+        assert "kz_pct" in SYSTEM_PROMPT
         assert "Сумма = 100" in SYSTEM_PROMPT
 
     def test_geo_typical_distribution_kz(self) -> None:

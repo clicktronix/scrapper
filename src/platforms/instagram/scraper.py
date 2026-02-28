@@ -5,16 +5,24 @@ from instagrapi.exceptions import UserNotFound
 from loguru import logger
 
 from src.config import Settings
-from src.models.blog import ScrapedComment, ScrapedHighlight, ScrapedPost, ScrapedProfile
+from src.models.blog import BioLink, ScrapedComment, ScrapedHighlight, ScrapedPost, ScrapedProfile
 from src.platforms.base import DiscoveredProfile
 from src.platforms.instagram.client import AccountPool
 from src.platforms.instagram.exceptions import PrivateAccountError
+from src.platforms.instagram.mappers import (
+    extract_carousel_count,
+    extract_cover_url,
+    extract_video_duration,
+    normalize_title,
+)
 from src.platforms.instagram.metrics import (
+    assign_engagement_rates,
     calculate_er,
     calculate_er_trend,
     calculate_posts_per_week,
     extract_hashtags,
     extract_mentions,
+    select_posts_for_comments,
 )
 
 TOP_HASHTAG_MEDIAS_AMOUNT = 9
@@ -39,11 +47,9 @@ def media_to_scraped_post(media: Any) -> ScrapedPost:
         location_lng = getattr(media.location, "lng", None)
 
     # Извлечение дополнительных полей
-    video_duration = None
-    if media.media_type == 2:
-        dur = getattr(media, "video_duration", None)
-        if dur and dur > 0:
-            video_duration = float(dur)
+    video_duration = extract_video_duration(
+        media.media_type, getattr(media, "video_duration", None)
+    )
 
     usertags_list = []
     for ut in getattr(media, "usertags", []) or []:
@@ -55,15 +61,11 @@ def media_to_scraped_post(media: Any) -> ScrapedPost:
 
     comments_disabled = bool(getattr(media, "comments_disabled", False))
 
-    title = getattr(media, "title", None) or None
-    if title == "":
-        title = None
+    title = normalize_title(getattr(media, "title", None))
 
-    carousel_media_count = None
-    if media.media_type == 8:
-        resources = getattr(media, "resources", []) or []
-        if resources:
-            carousel_media_count = len(resources)
+    carousel_media_count = extract_carousel_count(
+        media.media_type, getattr(media, "resources", []) or []
+    )
 
     return ScrapedPost(
         platform_id=str(media.pk),
@@ -130,11 +132,7 @@ def highlight_to_scraped(highlight: Any) -> ScrapedHighlight:
                     story_hashtags.add(name)
 
     # Извлечение cover_url из cover_media dict
-    cover_url = None
-    cover_media = getattr(highlight, "cover_media", {})
-    if isinstance(cover_media, dict):
-        cropped = cover_media.get("cropped_image_version") or {}
-        cover_url = cropped.get("url")
+    cover_url = extract_cover_url(getattr(highlight, "cover_media", {}))
 
     return ScrapedHighlight(
         platform_id=str(highlight.pk),
@@ -223,10 +221,7 @@ class InstagramScraper:
         medias_mapped = [media_to_scraped_post(m) for m in medias]
 
         # 5. Комментарии для первых N постов с включёнными комментариями
-        posts_for_comments = [
-            p for p in medias_mapped
-            if not p.comments_disabled and p.comment_count > 0
-        ][:self.settings.posts_with_comments]
+        posts_for_comments = select_posts_for_comments(medias_mapped, self.settings.posts_with_comments)
 
         for post in posts_for_comments:
             try:
@@ -247,22 +242,18 @@ class InstagramScraper:
         reels_for_er = [p for p in medias_mapped if p.media_type == 2 and p.product_type == "clips"]
 
         # Вычислить engagement_rate для всех медиа
-        if user.follower_count > 0:
-            for p in medias_mapped:
-                p.engagement_rate = round(
-                    (p.like_count + p.comment_count) / user.follower_count * 100, 2
-                )
+        assign_engagement_rates(medias_mapped, user.follower_count)
 
-        bio_links: list[dict[str, str | None]] = []
+        bio_links: list[BioLink] = []
         if user.bio_links:
             for link in user.bio_links:
                 url = getattr(link, "url", None)
                 if url:
-                    bio_links.append({
-                        "url": str(url),
-                        "title": getattr(link, "title", None) or None,
-                        "link_type": getattr(link, "link_type", None) or None,
-                    })
+                    bio_links.append(BioLink(
+                        url=str(url),
+                        title=getattr(link, "title", None) or None,
+                        link_type=getattr(link, "link_type", None) or None,
+                    ))
 
         # Извлечение контактных данных профиля
         account_type = getattr(user, "account_type", None) or None

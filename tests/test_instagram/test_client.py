@@ -27,6 +27,7 @@ def _make_pool(num_accounts: int = 3) -> AccountPool:
     pool.current_index = 0
     pool.requests_per_hour = 30
     pool.cooldown_minutes = 45
+    pool._db = None
     pool._lock = asyncio.Lock()
 
     for i in range(num_accounts):

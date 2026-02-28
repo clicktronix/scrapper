@@ -80,9 +80,9 @@ class TestAIInsights:
                 "own_product_type": "курс по макияжу",
             },
             "audience_inference": {
-                "audience_male_pct": 20,
-                "audience_female_pct": 75,
-                "audience_other_pct": 5,
+                "gender": {"male_pct": 20, "female_pct": 75, "other_pct": 5},
+                "age": {"pct_13_17": 5, "pct_18_24": 30, "pct_25_34": 40, "pct_35_44": 20, "pct_45_plus": 5},
+                "geo": {"kz_pct": 70, "ru_pct": 20, "uz_pct": 5, "other_geo_pct": 5},
                 "estimated_audience_age": "25-34",
                 "estimated_audience_geo": "kz",
                 "geo_mentions": ["Алматы", "Астана"],
@@ -415,7 +415,7 @@ class TestTagsMinLength:
 
         schema = AIInsights.model_json_schema()
         tags_schema = schema["properties"]["tags"]
-        assert tags_schema.get("minItems") == 3
+        assert tags_schema.get("minItems") == 1
         assert tags_schema.get("maxItems") == 40
 
     def test_secondary_topics_max_length_5_in_json_schema(self) -> None:
@@ -505,7 +505,7 @@ class TestEnumConstraints:
 
     def test_enum_survives_strict_schema(self) -> None:
         """enum ограничения сохраняются после _make_strict_schema."""
-        from src.ai.batch import _make_strict_schema
+        from src.ai.batch_api import _make_strict_schema
         from src.ai.schemas import AIInsights
 
         schema = _make_strict_schema(AIInsights.model_json_schema())

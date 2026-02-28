@@ -5,6 +5,65 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+class TestGetScraper:
+    """Тесты helper _get_scraper."""
+
+    @pytest.mark.asyncio
+    async def test_returns_scraper_when_exists(self) -> None:
+        from src.worker.loop import _get_scraper
+
+        mock_scraper = AsyncMock()
+        mock_db = MagicMock()
+
+        result = await _get_scraper(
+            {"instagram": mock_scraper}, mock_db, "t1", 0, 3, "full_scrape",
+        )
+        assert result is mock_scraper
+
+    @pytest.mark.asyncio
+    async def test_returns_none_and_fails_task_when_missing(self) -> None:
+        from src.worker.loop import _get_scraper
+
+        mock_db = MagicMock()
+
+        with patch("src.worker.loop.mark_task_failed", new_callable=AsyncMock) as mock_failed:
+            result = await _get_scraper({}, mock_db, "t1", 0, 3, "full_scrape")
+            assert result is None
+            mock_failed.assert_called_once()
+            assert mock_failed.call_args.kwargs["retry"] is False
+
+
+class TestTaskHandlersRegistry:
+    """Тесты реестра обработчиков задач."""
+
+    def test_resolve_handler_all_types(self) -> None:
+        from src.worker.loop import _resolve_handler
+
+        assert _resolve_handler("full_scrape") is not None
+        assert _resolve_handler("ai_analysis") is not None
+        assert _resolve_handler("discover") is not None
+
+    def test_resolve_handler_unknown_returns_none(self) -> None:
+        from src.worker.loop import _resolve_handler
+
+        assert _resolve_handler("unknown_type") is None
+
+    def test_full_scrape_requires_scraper(self) -> None:
+        from src.worker.loop import TASK_DEPS
+
+        assert "scraper" in TASK_DEPS["full_scrape"]
+
+    def test_ai_analysis_requires_openai(self) -> None:
+        from src.worker.loop import TASK_DEPS
+
+        assert "openai" in TASK_DEPS["ai_analysis"]
+
+    def test_discover_requires_scraper(self) -> None:
+        from src.worker.loop import TASK_DEPS
+
+        assert "scraper" in TASK_DEPS["discover"]
+
+
 class TestProcessTask:
     """Тесты process_task."""
 

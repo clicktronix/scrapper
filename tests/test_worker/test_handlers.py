@@ -6,70 +6,18 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import pytest
 
 from src.ai.schemas import AIInsights
-from src.models.blog import ScrapedHighlight, ScrapedPost, ScrapedProfile
+from src.models.blog import BioLink, ScrapedPost
 from src.platforms.base import DiscoveredProfile
 from src.platforms.instagram.exceptions import (
     AllAccountsCooldownError,
     PrivateAccountError,
 )
+from tests.conftest import make_db_mock, make_scraped_profile, make_settings, make_task
 
-
-def _make_settings() -> MagicMock:
-    settings = MagicMock()
-    settings.supabase_url = "https://test.supabase.co"
-    return settings
-
-
-def _make_task(
-    task_type: str = "full_scrape",
-    blog_id: str = "blog-1",
-    **kwargs,
-) -> dict:
-    return {
-        "id": "task-1",
-        "blog_id": blog_id,
-        "task_type": task_type,
-        "status": "pending",
-        "priority": 5,
-        "payload": kwargs.get("payload", {}),
-        "attempts": kwargs.get("attempts", 1),
-        "max_attempts": kwargs.get("max_attempts", 3),
-    }
-
-
-def _make_scraped_profile() -> ScrapedProfile:
-    return ScrapedProfile(
-        platform_id="12345",
-        username="testblogger",
-        full_name="Test Blogger",
-        biography="Test bio",
-        follower_count=50000,
-        following_count=500,
-        media_count=200,
-        is_verified=False,
-        is_business=True,
-        avg_er=3.5,
-        avg_er_reels=5.0,
-        er_trend="stable",
-        posts_per_week=2.5,
-        medias=[
-            ScrapedPost(
-                platform_id="p1",
-                media_type=1,
-                caption_text="Test",
-                like_count=1000,
-                comment_count=50,
-                taken_at=datetime(2026, 1, 15, tzinfo=UTC),
-            ),
-        ],
-        highlights=[
-            ScrapedHighlight(
-                platform_id="h1",
-                title="Дети",
-                media_count=5,
-            ),
-        ],
-    )
+# Обратная совместимость: локальные алиасы для использования в тестах
+_make_settings = make_settings
+_make_task = make_task
+_make_scraped_profile = make_scraped_profile
 
 
 class TestHandleFullScrape:
@@ -248,7 +196,7 @@ class TestHandleFullScrape:
             for c in update_calls
             if "scrape_status" in c[0][0]
         ]
-        assert "failed" in statuses
+        assert "pending" in statuses
 
     @pytest.mark.asyncio
     async def test_hiker_api_error_non_retryable_sets_needs_review(self) -> None:
@@ -720,21 +668,7 @@ class TestHandleDiscover:
             mock_scraper.discover.assert_not_called()
 
 
-def _mock_db_for_batch() -> MagicMock:
-    """Создать мок Supabase для batch-тестов."""
-    db = MagicMock()
-    table_mock = MagicMock()
-    db.table.return_value = table_mock
-    table_mock.select.return_value = table_mock
-    table_mock.eq.return_value = table_mock
-    table_mock.update.return_value = table_mock
-    table_mock.upsert.return_value = table_mock
-    table_mock.order.return_value = table_mock
-    table_mock.limit.return_value = table_mock
-    table_mock.in_.return_value = table_mock
-    table_mock.execute.return_value = MagicMock(data=[])
-    db.rpc.return_value.execute.return_value = MagicMock()
-    return db
+_mock_db_for_batch = make_db_mock
 
 
 class TestHandleBatchResults:
@@ -874,20 +808,27 @@ class TestHandleBatchResults:
             mock_match.assert_called_once_with(db, "blog-1", insights, categories={})
 
     @pytest.mark.asyncio
-    async def test_failed_batch_does_nothing(self) -> None:
-        """Батч со статусом 'failed' — ничего не делаем."""
+    async def test_failed_batch_retries_tasks(self) -> None:
+        """Батч со статусом 'failed' — ретраит задачи."""
         from src.worker.handlers import handle_batch_results
 
         db = _mock_db_for_batch()
         mock_client = MagicMock()
 
-        with patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll:
+        with (
+            patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.mark_task_failed", new_callable=AsyncMock) as mock_fail,
+        ):
             mock_poll.return_value = {"status": "failed"}
             await handle_batch_results(
                 db, mock_client, "batch-fail", {"blog-1": "task-1"}
             )
 
-        db.table.return_value.update.assert_not_called()
+            mock_fail.assert_called_once()
+            call_args = mock_fail.call_args
+            assert call_args.args[1] == "task-1"  # task_id
+            assert "Batch failed" in call_args.args[4]  # error message
+            assert call_args.kwargs.get("retry") is True
 
     @pytest.mark.asyncio
     async def test_expired_batch_with_partial_results(self) -> None:
@@ -1083,11 +1024,14 @@ class TestHandleAiAnalysis:
         db = _mock_db_for_batch()
         task = _make_task("ai_analysis")
         settings = MagicMock()
+        settings.batch_min_size = 10  # Текущая задача добавляется, но batch_min_size не достигнут
         mock_client = MagicMock()
 
-        await handle_ai_analysis(db, task, mock_client, settings)
+        with patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = MagicMock(data=[])
+            await handle_ai_analysis(db, task, mock_client, settings)
 
-        # submit_batch не должен вызываться
+        # submit_batch не должен вызываться (1 задача < batch_min_size=10)
         mock_client.files.create.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1161,7 +1105,7 @@ class TestHandleAiAnalysis:
 
         now_iso = datetime.now(UTC).isoformat()
         pending_data = MagicMock(
-            data=[{"id": "t1", "blog_id": "b1", "created_at": now_iso}]
+            data=[{"id": "task-1", "blog_id": "b1", "created_at": now_iso}]
         )
         blog_data = MagicMock(data=[{
             "id": "b1",
@@ -1419,7 +1363,7 @@ class TestHandleAiAnalysis:
         now_iso = datetime.now(UTC).isoformat()
         pending_data = MagicMock(
             data=[
-                {"id": "t1", "blog_id": "b1", "created_at": now_iso},
+                {"id": "task-1", "blog_id": "b1", "created_at": now_iso},
                 {"id": "t2", "blog_id": "b2", "created_at": now_iso},
             ]
         )
@@ -1879,7 +1823,8 @@ class TestHandleFullScrapeNewFields:
         profile.public_phone_country_code = "7"
         profile.city_name = "Алматы"
         profile.address_street = "Абая 1"
-        profile.bio_links = [{"url": "https://t.me/ch", "title": "TG", "link_type": None}]
+        profile.external_url = "https://example.com"
+        profile.bio_links = [BioLink(url="https://t.me/ch", title="TG", link_type=None)]
         scraper.scrape_profile = AsyncMock(return_value=profile)
 
         with (
@@ -1907,6 +1852,75 @@ class TestHandleFullScrapeNewFields:
             assert blog_data["city_name"] == "Алматы"
             assert blog_data["address_street"] == "Абая 1"
             assert blog_data["bio_links"] == [{"url": "https://t.me/ch", "title": "TG", "link_type": None}]
+            assert blog_data["full_name"] == "Test Blogger"
+            assert blog_data["external_url"] == "https://example.com"
+
+    @pytest.mark.asyncio
+    async def test_full_name_always_in_blog_data(self) -> None:
+        """full_name всегда записывается в blog_data (даже пустая строка)."""
+        from src.worker.handlers import handle_full_scrape
+
+        db = MagicMock()
+        task = _make_task("full_scrape")
+        scraper = MagicMock()
+
+        profile = _make_scraped_profile(full_name="")
+        scraper.scrape_profile = AsyncMock(return_value=profile)
+
+        with (
+            patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
+            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
+            patch("src.worker.handlers.persist_profile_images", new_callable=AsyncMock, return_value=(None, {})),
+            patch("src.worker.handlers.upsert_blog", new_callable=AsyncMock) as mock_upsert,
+            patch("src.worker.handlers.upsert_posts", new_callable=AsyncMock),
+            patch("src.worker.handlers.upsert_highlights", new_callable=AsyncMock),
+            patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock),
+            patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
+        ):
+            mock_run.side_effect = [
+                MagicMock(data=[{"username": "testblogger"}]),
+                MagicMock(),
+            ]
+
+            await handle_full_scrape(db, task, scraper, _make_settings())
+
+            blog_data = mock_upsert.call_args[0][2]
+            # full_name записывается безусловно, даже если пустая
+            assert "full_name" in blog_data
+            assert blog_data["full_name"] == ""
+
+    @pytest.mark.asyncio
+    async def test_external_url_excluded_when_none(self) -> None:
+        """external_url не записывается если None."""
+        from src.worker.handlers import handle_full_scrape
+
+        db = MagicMock()
+        task = _make_task("full_scrape")
+        scraper = MagicMock()
+
+        profile = _make_scraped_profile()
+        # external_url по умолчанию None
+        scraper.scrape_profile = AsyncMock(return_value=profile)
+
+        with (
+            patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
+            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
+            patch("src.worker.handlers.persist_profile_images", new_callable=AsyncMock, return_value=(None, {})),
+            patch("src.worker.handlers.upsert_blog", new_callable=AsyncMock) as mock_upsert,
+            patch("src.worker.handlers.upsert_posts", new_callable=AsyncMock),
+            patch("src.worker.handlers.upsert_highlights", new_callable=AsyncMock),
+            patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock),
+            patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
+        ):
+            mock_run.side_effect = [
+                MagicMock(data=[{"username": "testblogger"}]),
+                MagicMock(),
+            ]
+
+            await handle_full_scrape(db, task, scraper, _make_settings())
+
+            blog_data = mock_upsert.call_args[0][2]
+            assert "external_url" not in blog_data
 
     async def test_none_contact_fields_excluded(self) -> None:
         """None контактные поля не добавляются в blog_data."""
@@ -2084,7 +2098,8 @@ class TestLoadProfilesBioLinksCompat:
         assert len(profiles) == 1
         _, profile = profiles[0]
         assert len(profile.bio_links) == 2
-        assert profile.bio_links[0] == {"url": "https://t.me/ch", "title": None, "link_type": None}
+        assert profile.bio_links[0].url == "https://t.me/ch"
+        assert profile.bio_links[0].title is None
 
     async def test_new_dict_format_preserved(self) -> None:
         """Новый формат bio_links [{url, title, link_type}] сохраняется как есть."""
@@ -2106,7 +2121,7 @@ class TestLoadProfilesBioLinksCompat:
             profiles, task_ids, failed = await _load_profiles_for_batch(db, pending_tasks)
 
         _, profile = profiles[0]
-        assert profile.bio_links[0]["title"] == "TG"
+        assert profile.bio_links[0].title == "TG"
 
     async def test_null_bio_links_handled(self) -> None:
         """bio_links=None → пустой список."""
@@ -2241,7 +2256,7 @@ class TestHandleAiAnalysisBlogNotFound:
 
         now_iso = datetime.now(UTC).isoformat()
         pending_data = MagicMock(
-            data=[{"id": "t1", "blog_id": "deleted-blog", "created_at": now_iso}]
+            data=[{"id": "task-1", "blog_id": "deleted-blog", "created_at": now_iso}]
         )
         # Блог не найден в БД (батчевая загрузка возвращает пустой список)
         empty_blog = MagicMock(data=[])
@@ -2261,7 +2276,7 @@ class TestHandleAiAnalysisBlogNotFound:
             # Задача помечена failed
             mock_failed.assert_called_once()
             call_args = mock_failed.call_args
-            assert call_args[0][1] == "t1"  # task_id
+            assert call_args[0][1] == "task-1"  # task_id
             positional_match = "not found" in call_args[0][4].lower()
             kwarg_match = "not found" in str(
                 call_args.kwargs.get("error", "")
@@ -2282,7 +2297,7 @@ class TestHandleAiAnalysisBlogNotFound:
         now_iso = datetime.now(UTC).isoformat()
         pending_data = MagicMock(
             data=[
-                {"id": "t1", "blog_id": "b1", "created_at": now_iso},
+                {"id": "task-1", "blog_id": "b1", "created_at": now_iso},
                 {"id": "t2", "blog_id": "deleted-blog", "created_at": now_iso},
             ]
         )
@@ -2656,6 +2671,7 @@ class TestHandleBatchResultsTagsAndEmbedding:
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
             patch("src.worker.handlers.match_categories", new_callable=AsyncMock),
             patch("src.worker.handlers.match_tags", new_callable=AsyncMock),
+            patch("src.worker.handlers.build_embedding_text", return_value="тестовый текст"),
             patch("src.worker.handlers.generate_embedding", new_callable=AsyncMock,
                   return_value=fake_vector) as mock_embed,
             patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock),
@@ -2995,3 +3011,181 @@ class TestExtractBlogFieldsCityValidation:
         fields = _extract_blog_fields(insights)
 
         assert "city" not in fields
+
+
+class TestErrorHandlingConsistency:
+    """Тесты консистентности обработки ошибок."""
+
+    @pytest.mark.asyncio
+    async def test_discover_cooldown_uses_sanitize_error(self) -> None:
+        """AllAccountsCooldownError в handle_discover использует sanitize_error."""
+        from src.worker.handlers import handle_discover
+
+        task = _make_task("discover", payload={"hashtag": "test", "min_followers": 500})
+        mock_db = MagicMock()
+        table_mock = MagicMock()
+        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        mock_db.table.return_value = table_mock
+        mock_db.rpc.return_value.execute.return_value = MagicMock()
+
+        mock_scraper = AsyncMock()
+        # Ошибка с потенциальными credentials в URL
+        mock_scraper.discover.side_effect = AllAccountsCooldownError(
+            "Connection to https://user:password@api.example.com failed"
+        )
+
+        settings = MagicMock()
+
+        with patch(
+            "src.worker.handlers.mark_task_failed", new_callable=AsyncMock
+        ) as mock_fail:
+            await handle_discover(mock_db, task, mock_scraper, settings)
+
+            mock_fail.assert_called_once()
+            error_arg = mock_fail.call_args.kwargs.get("error") or mock_fail.call_args[0][4]
+            # sanitize_error должен заменить credentials на ***
+            assert "password" not in error_arg
+            assert "***" in error_arg
+
+    @pytest.mark.asyncio
+    async def test_full_scrape_generic_exception_sets_needs_review(self) -> None:
+        """Generic Exception в handle_full_scrape → needs_review=True."""
+        from src.worker.handlers import handle_full_scrape
+
+        task = _make_task("full_scrape")
+        mock_db = MagicMock()
+
+        blog_select_mock = MagicMock()
+        blog_select_mock.data = [{"username": "testblogger"}]
+
+        table_mock = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
+        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        mock_db.table.return_value = table_mock
+        mock_db.rpc.return_value.execute.return_value = MagicMock()
+
+        mock_scraper = AsyncMock()
+        mock_scraper.scrape_profile.side_effect = RuntimeError("Unexpected error")
+
+        await handle_full_scrape(mock_db, task, mock_scraper, _make_settings())
+
+        # Проверяем, что needs_review=True установлен при generic Exception
+        update_calls = table_mock.update.call_args_list
+        status_updates = [
+            c[0][0] for c in update_calls if c[0][0].get("scrape_status") == "pending"
+        ]
+        assert len(status_updates) > 0
+        assert any(u.get("needs_review") is True for u in status_updates)
+        # scrape_error тоже записывается при generic Exception
+        assert any(u.get("scrape_error") == "Unexpected error" for u in status_updates)
+
+    @pytest.mark.asyncio
+    async def test_hiker_error_non_retry_writes_scrape_error(self) -> None:
+        """HikerAPIError с non-retry статусом (4xx) записывает scrape_error."""
+        from src.platforms.instagram.exceptions import HikerAPIError
+        from src.worker.handlers import handle_full_scrape
+
+        task = _make_task("full_scrape")
+        mock_db = MagicMock()
+
+        blog_select_mock = MagicMock()
+        blog_select_mock.data = [{"username": "testblogger"}]
+
+        table_mock = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
+        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        mock_db.table.return_value = table_mock
+        mock_db.rpc.return_value.execute.return_value = MagicMock()
+
+        mock_scraper = AsyncMock()
+        mock_scraper.scrape_profile.side_effect = HikerAPIError(
+            status_code=400, detail="Bad request: invalid user"
+        )
+
+        await handle_full_scrape(mock_db, task, mock_scraper, _make_settings())
+
+        update_calls = table_mock.update.call_args_list
+        failed_updates = [
+            c[0][0] for c in update_calls if c[0][0].get("scrape_status") == "failed"
+        ]
+        assert len(failed_updates) > 0
+        assert any("scrape_error" in u for u in failed_updates)
+        assert any("Bad request" in u.get("scrape_error", "") for u in failed_updates)
+
+    @pytest.mark.asyncio
+    async def test_hiker_error_retry_no_scrape_error(self) -> None:
+        """HikerAPIError с retry статусом (429/5xx) НЕ записывает scrape_error."""
+        from src.platforms.instagram.exceptions import HikerAPIError
+        from src.worker.handlers import handle_full_scrape
+
+        task = _make_task("full_scrape")
+        mock_db = MagicMock()
+
+        blog_select_mock = MagicMock()
+        blog_select_mock.data = [{"username": "testblogger"}]
+
+        table_mock = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
+        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        mock_db.table.return_value = table_mock
+        mock_db.rpc.return_value.execute.return_value = MagicMock()
+
+        mock_scraper = AsyncMock()
+        mock_scraper.scrape_profile.side_effect = HikerAPIError(
+            status_code=429, detail="Rate limited"
+        )
+
+        await handle_full_scrape(mock_db, task, mock_scraper, _make_settings())
+
+        update_calls = table_mock.update.call_args_list
+        pending_updates = [
+            c[0][0] for c in update_calls if c[0][0].get("scrape_status") == "pending"
+        ]
+        # При retry (429) scrape_error НЕ записывается
+        assert all("scrape_error" not in u for u in pending_updates)
+
+    @pytest.mark.asyncio
+    async def test_discover_blog_creation_error_logged(self) -> None:
+        """Ошибка создания блога в handle_discover логируется с [discover] префиксом."""
+        from src.worker.handlers import handle_discover
+
+        db = MagicMock()
+        settings = MagicMock()
+        scraper = MagicMock()
+        scraper.discover = AsyncMock(return_value=[
+            DiscoveredProfile(
+                username="failuser",
+                full_name="Fail User",
+                platform_id="98",
+                follower_count=5000,
+            ),
+        ])
+
+        task = _make_task("discover", payload={"hashtag": "beauty", "min_followers": 1000})
+
+        with (
+            patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
+            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
+            patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
+            patch("src.worker.handlers.cleanup_orphan_person", new_callable=AsyncMock) as mock_cleanup,
+            patch("src.worker.handlers.logger") as mock_logger,
+        ):
+            mock_run.side_effect = [
+                MagicMock(data=[]),  # batch blogs select — нет совпадений
+                MagicMock(data=[{"id": "person-99"}]),  # person insert OK
+                RuntimeError("duplicate key"),  # blog insert fails
+            ]
+
+            await handle_discover(db, task, scraper, settings)
+
+            # cleanup вызван
+            mock_cleanup.assert_called_once_with(db, "person-99")
+            # logger.error вызван с русским сообщением и [discover] префиксом
+            error_calls = [
+                c for c in mock_logger.error.call_args_list
+                if "[discover]" in str(c)
+            ]
+            assert len(error_calls) > 0
+            error_msg = error_calls[0][0][0]
+            assert "failuser" in error_msg
+            assert "duplicate key" in error_msg

@@ -1,13 +1,12 @@
 """Генерация embedding для семантического поиска блогеров."""
+import openai
 from loguru import logger
 from openai import AsyncOpenAI
 
 from src.ai.schemas import AIInsights
 
-EMBEDDING_MODEL = "text-embedding-3-small"
 
-
-def build_embedding_text(insights: AIInsights) -> str:
+def build_embedding_text(insights: AIInsights) -> str | None:
     """Построить структурированный русскоязычный текст для embedding."""
     parts: list[str] = []
 
@@ -46,8 +45,8 @@ def build_embedding_text(insights: AIInsights) -> str:
     # Аудитория
     aud = insights.audience_inference
     aud_parts: list[str] = []
-    if aud.audience_male_pct is not None and aud.audience_female_pct is not None:
-        aud_parts.append(f"муж. {aud.audience_male_pct}%, жен. {aud.audience_female_pct}%")
+    if aud.gender and aud.gender.male_pct is not None and aud.gender.female_pct is not None:
+        aud_parts.append(f"муж. {aud.gender.male_pct}%, жен. {aud.gender.female_pct}%")
     if aud.estimated_audience_age:
         aud_parts.append(aud.estimated_audience_age)
     if aud.estimated_audience_geo:
@@ -83,20 +82,41 @@ def build_embedding_text(insights: AIInsights) -> str:
     if quality_parts:
         parts.append(f"Характеристики: {', '.join(quality_parts)}.")
 
-    return "\n".join(parts) if parts else "блогер"
+    return "\n".join(parts) if parts else None
+
+
+_FALLBACK_EMBEDDING_MODEL = "text-embedding-3-small"
+
+
+def _get_embedding_model() -> str:
+    """Получить модель embedding из настроек (с fallback на дефолт)."""
+    try:
+        from src.config import load_settings
+        return load_settings().embedding_model
+    except Exception:
+        return _FALLBACK_EMBEDDING_MODEL
 
 
 async def generate_embedding(
     client: AsyncOpenAI,
     text: str,
+    model: str | None = None,
 ) -> list[float] | None:
     """Сгенерировать embedding-вектор через OpenAI API. None при ошибке."""
+    if model is None:
+        model = _get_embedding_model()
     try:
         response = await client.embeddings.create(
-            model=EMBEDDING_MODEL,
+            model=model,
             input=text,
         )
         return response.data[0].embedding
+    except openai.AuthenticationError:
+        logger.error("[embedding] Ошибка аутентификации OpenAI — проверьте OPENAI_API_KEY")
+        raise
+    except (openai.RateLimitError, openai.APITimeoutError) as e:
+        logger.warning(f"[embedding] Транзиентная ошибка OpenAI: {e}")
+        return None
     except Exception as e:
         logger.error(f"[embedding] Ошибка генерации embedding: {e}")
         return None

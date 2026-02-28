@@ -5,7 +5,7 @@
 ## Что делает
 
 - **Скрейпит** Instagram-профили через HikerAPI (SaaS) или instagrapi — посты, рилсы, хайлайты, метрики
-- **Анализирует** контент через OpenAI Batch API (`gpt-5-nano`, structured outputs) — тематика, аудитория, коммерция
+- **Анализирует** контент через OpenAI Batch API (`gpt-5-mini`, structured outputs) — тематика, аудитория, коммерция
 - **Классифицирует** блогеров: категории, теги (3-уровневая таксономия), embedding для семантического поиска
 - **Загружает** изображения (аватары, thumbnails постов) в Supabase Storage
 - **Открывает** новых блогеров по хештегам — автоматический discovery
@@ -42,7 +42,7 @@
                                │              │
                     ┌──────────▼───┐   ┌──────▼───────────┐
                     │  HikerAPI    │   │  OpenAI Batch    │
-                    │  (SaaS)      │   │  API (gpt-5-nano)│
+                    │  (SaaS)      │   │  API (gpt-5-mini)│
                     │      или     │   │                   │
                     │  instagrapi  │   │  Structured       │
                     │  (локальный) │   │  Outputs          │
@@ -85,7 +85,7 @@ docker compose logs -f scraper
 ### Тесты
 
 ```bash
-uv run pytest tests/ -v          # Все тесты (600+)
+uv run pytest tests/ -v          # Все тесты (840+)
 uv run pytest tests/ -v -x       # Остановиться на первом падении
 uv run pytest tests/test_ai/ -v  # Только AI-модуль
 uv run pytest tests/test_api/ -v # Только API-модуль
@@ -139,13 +139,16 @@ curl -X POST http://localhost:8001/api/tasks/<task-id>/retry \
 src/
 ├── main.py                  # Точка входа — API + воркер + scheduler
 ├── config.py                # Настройки из .env (Pydantic Settings)
-├── database.py              # CRUD-операции с Supabase
+├── database.py              # CRUD-операции с Supabase (run_in_thread + retry)
 ├── storage.py               # Supabase Storage для Instagram-сессий
 ├── image_storage.py         # Загрузка изображений в Supabase Storage
+├── utils.py                 # Shared утилиты (is_transient_network_error)
 │
 ├── api/
-│   ├── app.py               # FastAPI-приложение (create_app)
-│   └── schemas.py           # Request/Response Pydantic-модели
+│   ├── app.py               # FastAPI-приложение (create_app, роуты)
+│   ├── services.py          # Бизнес-логика (find_or_create_blog, fetch_tasks_list)
+│   ├── schemas.py           # Request/Response Pydantic-модели
+│   └── rate_limiter.py      # In-memory sliding window rate limiter
 │
 ├── models/
 │   ├── task.py              # ScrapeTask — задача в очереди
@@ -153,7 +156,8 @@ src/
 │
 ├── ai/
 │   ├── prompt.py            # Мультимодальный промпт (текст + изображения)
-│   ├── batch.py             # OpenAI Batch API + match_categories + match_tags
+│   ├── batch_api.py         # OpenAI Batch API (submit, poll, results)
+│   ├── taxonomy_matching.py # match_categories, match_tags, match_city
 │   ├── schemas.py           # AIInsights — structured output схема
 │   ├── taxonomy.py          # CATEGORIES + TAGS (3-уровневая таксономия)
 │   ├── embedding.py         # text-embedding-3-small (1536 dims)
@@ -165,12 +169,16 @@ src/
 │       ├── hiker_scraper.py # HikerAPI бэкенд (SaaS, SafeHikerClient)
 │       ├── scraper.py       # instagrapi бэкенд (локальный, AccountPool)
 │       ├── client.py        # AccountPool — ротация аккаунтов
-│       ├── metrics.py       # ER, тренд, частота публикаций
+│       ├── mappers.py       # Общие helpers маппинга (video_duration, story data)
+│       ├── metrics.py       # ER, тренд, частота, engagement helpers
 │       └── exceptions.py    # HikerAPIError, InsufficientBalanceError
 │
 └── worker/
-    ├── loop.py              # Polling loop с graceful shutdown
-    ├── handlers.py          # Обработчики задач (full_scrape, ai_analysis, discover)
+    ├── loop.py              # Polling loop, dispatch, graceful shutdown
+    ├── handlers.py          # Re-export фасад для обработчиков
+    ├── scrape_handler.py    # handle_full_scrape
+    ├── ai_handler.py        # handle_ai_analysis, batch results
+    ├── discover_handler.py  # handle_discover
     └── scheduler.py         # APScheduler — cron-задачи
 ```
 
@@ -202,7 +210,7 @@ src/
 |-----------|-----------|
 | Язык | Python 3.13 |
 | Скрейпинг | HikerAPI (SaaS) / instagrapi 2.1+ |
-| AI-анализ | OpenAI Batch API (gpt-5-nano) |
+| AI-анализ | OpenAI Batch API (gpt-5-mini) |
 | Embedding | text-embedding-3-small (1536 dims) |
 | База данных | Supabase PostgreSQL + pgvector |
 | Хранилище | Supabase Storage (сессии, изображения) |

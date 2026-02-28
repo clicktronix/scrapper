@@ -28,7 +28,7 @@ class TestListTasks:
             "started_at": None,
             "completed_at": None,
         }
-        with patch("src.api.app.run_in_thread") as mock_run:
+        with patch("src.api.services.run_in_thread") as mock_run:
             mock_run.return_value = MagicMock(data=[task_row], count=1)
             client = TestClient(app)
             resp = client.get("/api/tasks", headers=AUTH_HEADERS)
@@ -41,7 +41,7 @@ class TestListTasks:
 
     def test_list_tasks_empty(self) -> None:
         app = make_app()
-        with patch("src.api.app.run_in_thread") as mock_run:
+        with patch("src.api.services.run_in_thread") as mock_run:
             mock_run.return_value = MagicMock(data=[], count=0)
             client = TestClient(app)
             resp = client.get("/api/tasks", headers=AUTH_HEADERS)
@@ -53,7 +53,7 @@ class TestListTasks:
 
     def test_list_tasks_pagination_params(self) -> None:
         app = make_app()
-        with patch("src.api.app.run_in_thread") as mock_run:
+        with patch("src.api.services.run_in_thread") as mock_run:
             mock_run.return_value = MagicMock(data=[], count=50)
             client = TestClient(app)
             resp = client.get("/api/tasks?limit=10&offset=20", headers=AUTH_HEADERS)

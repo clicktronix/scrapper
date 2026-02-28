@@ -8,6 +8,10 @@ from loguru import logger
 from PIL import Image
 
 from src.models.blog import ScrapedProfile
+from src.utils import is_safe_url
+
+# Защита от decompression bomb (по умолчанию ~178M пикселей — слишком много)
+Image.MAX_IMAGE_PIXELS = 25_000_000
 
 # Максимальное количество изображений на профиль (как в prompt.py)
 MAX_IMAGES = 10
@@ -91,6 +95,10 @@ async def download_image_as_base64(
     semaphore: asyncio.Semaphore | None = None,
 ) -> str | None:
     """Скачать изображение и вернуть data URI. None при ошибке."""
+    if not is_safe_url(url):
+        logger.warning(f"[images] Небезопасный URL, пропускаем: {url}")
+        return None
+
     response: httpx.Response | None = None
     for attempt in range(MAX_RETRIES + 1):
         try:
@@ -105,7 +113,14 @@ async def download_image_as_base64(
             logger.warning(f"[images] Таймаут при скачивании ({MAX_RETRIES + 1} попыток): {url}")
             return None
         except httpx.HTTPStatusError as e:
-            logger.warning(f"[images] HTTP {e.response.status_code} при скачивании: {url}")
+            status = e.response.status_code
+            # Retry при 429 (rate limit) и 5xx (серверные ошибки)
+            if status in (429, 500, 502, 503, 504) and attempt < MAX_RETRIES:
+                delay = RETRY_BASE_DELAY * (attempt + 1)
+                logger.debug(f"[images] HTTP {status} (попытка {attempt + 1}), ретрай через {delay}с: {url}")
+                await asyncio.sleep(delay)
+                continue
+            logger.warning(f"[images] HTTP {status} при скачивании: {url}")
             return None
         except httpx.HTTPError as e:
             logger.warning(f"[images] Ошибка при скачивании {url}: {e}")
@@ -175,14 +190,23 @@ async def resolve_profile_images(
 
     try:
         tasks = [download_image_as_base64(url, client, semaphore=semaphore) for url in urls]
-        results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
     finally:
         if own_client:
             await client.aclose()
 
+    # Заменяем exceptions на None
+    processed: list[str | None] = []
+    for r in results:
+        if isinstance(r, BaseException):
+            logger.warning(f"[images] Ошибка загрузки изображения: {r}")
+            processed.append(None)
+        else:
+            processed.append(r)
+
     # Собираем только успешные
     image_map: dict[str, str] = {}
-    for url, data_uri in zip(urls, results):
+    for url, data_uri in zip(urls, processed):
         if data_uri is not None:
             image_map[url] = data_uri
 

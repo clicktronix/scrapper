@@ -78,7 +78,7 @@ class TestBuildBatchRequest:
     """Тесты формирования строки запроса для Batch API."""
 
     def test_structure(self) -> None:
-        from src.ai.batch import build_batch_request
+        from src.ai.batch_api import build_batch_request
 
         settings = _make_settings()
         profile = _make_profile()
@@ -90,7 +90,7 @@ class TestBuildBatchRequest:
         assert request["body"]["model"] == "gpt-5-nano"
 
     def test_has_structured_output(self) -> None:
-        from src.ai.batch import build_batch_request
+        from src.ai.batch_api import build_batch_request
 
         settings = _make_settings()
         profile = _make_profile()
@@ -102,7 +102,7 @@ class TestBuildBatchRequest:
         assert rf["json_schema"]["name"] == "ai_insights"
 
     def test_messages_included(self) -> None:
-        from src.ai.batch import build_batch_request
+        from src.ai.batch_api import build_batch_request
 
         settings = _make_settings()
         profile = _make_profile()
@@ -115,7 +115,7 @@ class TestBuildBatchRequest:
 
     def test_image_map_passed_to_prompt(self) -> None:
         """image_map передаётся в build_analysis_prompt через build_batch_request."""
-        from src.ai.batch import build_batch_request
+        from src.ai.batch_api import build_batch_request
 
         settings = _make_settings()
         profile = ScrapedProfile(
@@ -148,7 +148,7 @@ class TestBuildBatchRequest:
 
     def test_text_only_no_images(self) -> None:
         """text_only=True → изображения не включаются в запрос."""
-        from src.ai.batch import build_batch_request
+        from src.ai.batch_api import build_batch_request
 
         settings = _make_settings()
         profile = ScrapedProfile(
@@ -184,7 +184,7 @@ class TestBuildBatchRequest:
 
     def test_text_only_false_includes_images(self) -> None:
         """text_only=False (default) → изображения включены."""
-        from src.ai.batch import build_batch_request
+        from src.ai.batch_api import build_batch_request
 
         settings = _make_settings()
         profile = ScrapedProfile(
@@ -211,7 +211,7 @@ class TestSubmitBatch:
     async def test_submit_creates_batch(self) -> None:
         from unittest.mock import patch
 
-        from src.ai.batch import submit_batch
+        from src.ai.batch_api import submit_batch
 
         settings = _make_settings()
         profile = _make_profile()
@@ -225,7 +225,7 @@ class TestSubmitBatch:
         mock_batch.id = "batch-xyz"
         mock_client.batches.create = AsyncMock(return_value=mock_batch)
 
-        with patch("src.ai.batch.resolve_profile_images", new_callable=AsyncMock, return_value={}):
+        with patch("src.ai.batch_api.resolve_profile_images", new_callable=AsyncMock, return_value={}):
             batch_id = await submit_batch(
                 mock_client, [("blog-123", profile)], settings
             )
@@ -236,7 +236,7 @@ class TestSubmitBatch:
 
     @pytest.mark.asyncio
     async def test_submit_empty_profiles_raises(self) -> None:
-        from src.ai.batch import submit_batch
+        from src.ai.batch_api import submit_batch
 
         settings = _make_settings()
         mock_client = MagicMock()
@@ -248,7 +248,7 @@ class TestSubmitBatch:
     async def test_submit_multiple_profiles(self) -> None:
         from unittest.mock import patch
 
-        from src.ai.batch import submit_batch
+        from src.ai.batch_api import submit_batch
 
         settings = _make_settings()
         profiles = [
@@ -266,7 +266,7 @@ class TestSubmitBatch:
         mock_batch.id = "batch-multi"
         mock_client.batches.create = AsyncMock(return_value=mock_batch)
 
-        with patch("src.ai.batch.resolve_profile_images", new_callable=AsyncMock, return_value={}):
+        with patch("src.ai.batch_api.resolve_profile_images", new_callable=AsyncMock, return_value={}):
             batch_id = await submit_batch(mock_client, profiles, settings)
         assert batch_id == "batch-multi"
 
@@ -275,7 +275,7 @@ class TestSubmitBatch:
         """resolve_profile_images вызывается для каждого профиля."""
         from unittest.mock import patch
 
-        from src.ai.batch import submit_batch
+        from src.ai.batch_api import submit_batch
 
         settings = _make_settings()
         profile1 = _make_profile()
@@ -290,7 +290,7 @@ class TestSubmitBatch:
         mock_batch.id = "batch-resolve"
         mock_client.batches.create = AsyncMock(return_value=mock_batch)
 
-        with patch("src.ai.batch.resolve_profile_images", new_callable=AsyncMock, return_value={}) as mock_resolve:
+        with patch("src.ai.batch_api.resolve_profile_images", new_callable=AsyncMock, return_value={}) as mock_resolve:
             await submit_batch(mock_client, [("b1", profile1), ("b2", profile2)], settings)
 
         assert mock_resolve.call_count == 2
@@ -303,7 +303,7 @@ class TestSubmitBatch:
         """text_only профили не участвуют в загрузке изображений."""
         from unittest.mock import patch
 
-        from src.ai.batch import submit_batch
+        from src.ai.batch_api import submit_batch
 
         settings = _make_settings()
         profile1 = _make_profile()
@@ -319,7 +319,7 @@ class TestSubmitBatch:
         mock_client.batches.create = AsyncMock(return_value=mock_batch)
 
         with patch(
-            "src.ai.batch.resolve_profile_images",
+            "src.ai.batch_api.resolve_profile_images",
             new_callable=AsyncMock, return_value={},
         ) as mock_resolve:
             await submit_batch(
@@ -339,7 +339,7 @@ class TestPollBatch:
 
     @pytest.mark.asyncio
     async def test_in_progress(self) -> None:
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         mock_client = MagicMock()
         mock_batch = _make_batch_mock(status="in_progress", output_file_id=None)
@@ -351,7 +351,7 @@ class TestPollBatch:
 
     @pytest.mark.asyncio
     async def test_completed_with_results(self) -> None:
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         insights_json = _valid_insights().model_dump_json()
         output_line = json.dumps({
@@ -382,7 +382,7 @@ class TestPollBatch:
 
     @pytest.mark.asyncio
     async def test_completed_no_output_file(self) -> None:
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         mock_client = MagicMock()
         mock_batch = _make_batch_mock(output_file_id=None, total=0, completed=0)
@@ -395,7 +395,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_completed_with_error_file(self) -> None:
         """error_file_id содержит провалившиеся запросы — они попадают в results как None."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         # Успешный результат
         insights_json = _valid_insights().model_dump_json()
@@ -440,7 +440,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_completed_only_errors(self) -> None:
         """Батч без output_file_id, только error_file_id."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         error_line = json.dumps({
             "custom_id": "blog-3",
@@ -466,7 +466,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_refusal_returns_tuple(self) -> None:
         """Refusal возвращает tuple ('refusal', reason), не None."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         output_line = json.dumps({
             "custom_id": "blog-2",
@@ -495,7 +495,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_content_as_text_parts_parsed(self) -> None:
         """message.content как list[text-part] корректно парсится."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         insights_json = _valid_insights().model_dump_json()
         output_line = json.dumps({
@@ -527,7 +527,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_status_code_error_returns_none(self) -> None:
         """response.status_code >= 400 помечается как None."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         output_line = json.dumps({
             "custom_id": "blog-http-error",
@@ -552,7 +552,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_status_code_zero_returns_none(self) -> None:
         """status_code=0 — внутренний сбой OpenAI → None."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         output_line = json.dumps({
             "custom_id": "blog-zero",
@@ -578,7 +578,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_failed_status(self) -> None:
         """Батч со статусом 'failed' — нет файлов, просто статус."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         mock_client = MagicMock()
         mock_batch = _make_batch_mock(status="failed", output_file_id=None)
@@ -591,7 +591,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_expired_status_no_files(self) -> None:
         """Expired без файлов — пустые results."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         mock_client = MagicMock()
         mock_batch = _make_batch_mock(
@@ -606,7 +606,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_cancelled_status(self) -> None:
         """Батч со статусом 'cancelled' — не completed."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         mock_client = MagicMock()
         mock_batch = _make_batch_mock(status="cancelled", output_file_id=None)
@@ -619,7 +619,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_cancelling_status(self) -> None:
         """'cancelling' — промежуточный статус, не терминальный."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         mock_client = MagicMock()
         mock_batch = _make_batch_mock(status="cancelling", output_file_id=None)
@@ -632,7 +632,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_malformed_jsonl_line_skipped(self) -> None:
         """Битая строка JSONL не валит весь батч — пропускается."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         insights_json = _valid_insights().model_dump_json()
         good_line = json.dumps({
@@ -664,7 +664,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_malformed_error_jsonl_skipped(self) -> None:
         """Битая строка в error file пропускается."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         good_error = json.dumps({
             "custom_id": "blog-2",
@@ -692,7 +692,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_missing_custom_id_skipped(self) -> None:
         """Строка без custom_id пропускается."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         # Строка без custom_id
         no_id_line = json.dumps({
@@ -727,7 +727,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_expired_with_partial_results(self) -> None:
         """Expired батч МОЖЕТ иметь partial output_file_id — результаты должны обрабатываться."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         insights_json = _valid_insights().model_dump_json()
         output_line = json.dumps({
@@ -773,7 +773,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_response_null_in_output_line(self) -> None:
         """Строка с response: null в output file → не крашит парсинг."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         # response: null — такое возможно при batch API edge cases
         null_response_line = json.dumps({
@@ -807,7 +807,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_validating_status(self) -> None:
         """'validating' — промежуточный статус, не терминальный."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         mock_client = MagicMock()
         mock_batch = _make_batch_mock(status="validating", output_file_id=None)
@@ -820,7 +820,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_finalizing_status(self) -> None:
         """'finalizing' — промежуточный статус, не терминальный."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         mock_client = MagicMock()
         mock_batch = _make_batch_mock(status="finalizing", output_file_id=None)
@@ -833,7 +833,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_empty_content_returns_none(self) -> None:
         """Пустой content от AI → results[id] = None (ValidationError перехватывается)."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         empty_content_line = json.dumps({
             "custom_id": "blog-empty",
@@ -860,7 +860,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_json_in_code_fence_parsed(self) -> None:
         """JSON внутри markdown code fence корректно парсится fallback-ом."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         wrapped_json = f"```json\n{_valid_insights().model_dump_json()}\n```"
         output_line = json.dumps({
@@ -887,7 +887,7 @@ class TestPollBatch:
     @pytest.mark.asyncio
     async def test_duplicate_custom_id_last_wins(self) -> None:
         """Две строки с одинаковым custom_id — последняя перезаписывает."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         insights1 = _valid_insights(confidence=1)
         insights2 = _valid_insights(confidence=5)
@@ -930,7 +930,7 @@ class TestMatchCategories:
 
     @pytest.mark.asyncio
     async def test_matches_primary_and_secondary(self) -> None:
-        from src.ai.batch import match_categories
+        from src.ai.taxonomy_matching import match_categories
 
         insights = AIInsights()
         insights.content.primary_categories = ["beauty"]  # код категории
@@ -956,7 +956,7 @@ class TestMatchCategories:
 
     @pytest.mark.asyncio
     async def test_skips_when_no_categories(self) -> None:
-        from src.ai.batch import match_categories
+        from src.ai.taxonomy_matching import match_categories
 
         insights = AIInsights()
         insights.content.primary_categories = []
@@ -970,7 +970,7 @@ class TestMatchCategories:
     @pytest.mark.asyncio
     async def test_no_matching_categories_in_db(self) -> None:
         """Тема есть, но в categories таблице совпадений нет → upsert не вызывается."""
-        from src.ai.batch import match_categories
+        from src.ai.taxonomy_matching import match_categories
 
         insights = AIInsights()
         insights.content.primary_categories = ["cooking"]  # код, которого нет в БД
@@ -992,7 +992,7 @@ class TestMatchCategories:
     @pytest.mark.asyncio
     async def test_no_secondary_topics(self) -> None:
         """Только primary_categories, без secondary → delete + insert."""
-        from src.ai.batch import match_categories
+        from src.ai.taxonomy_matching import match_categories
 
         insights = AIInsights()
         insights.content.primary_categories = ["beauty"]  # код категории
@@ -1017,7 +1017,7 @@ class TestMatchCategories:
     @pytest.mark.asyncio
     async def test_case_insensitive_matching(self) -> None:
         """Сопоставление нечувствительно к регистру."""
-        from src.ai.batch import match_categories
+        from src.ai.taxonomy_matching import match_categories
 
         insights = AIInsights()
         insights.content.primary_categories = ["BEAUTY"]  # код в верхнем регистре
@@ -1042,7 +1042,7 @@ class TestMatchCategories:
     @pytest.mark.asyncio
     async def test_primary_is_secondary_upserts_correctly(self) -> None:
         """is_primary=False для secondary topics."""
-        from src.ai.batch import match_categories
+        from src.ai.taxonomy_matching import match_categories
 
         insights = AIInsights()
         insights.content.primary_categories = ["beauty"]  # код категории
@@ -1072,7 +1072,7 @@ class TestMatchCategories:
     @pytest.mark.asyncio
     async def test_primary_category_in_secondary_keeps_is_primary_true(self) -> None:
         """primary_categories[0] совпадает с элементом secondary_topics — is_primary=True сохраняется."""
-        from src.ai.batch import match_categories
+        from src.ai.taxonomy_matching import match_categories
 
         insights = AIInsights()
         insights.content.primary_categories = ["beauty"]  # код категории
@@ -1107,7 +1107,7 @@ class TestMatchCategories:
     @pytest.mark.asyncio
     async def test_primary_matches_by_code(self) -> None:
         """Primary topic = код категории → матчится по code."""
-        from src.ai.batch import match_categories
+        from src.ai.taxonomy_matching import match_categories
 
         insights = AIInsights()
         insights.content.primary_categories = ["beauty"]  # код, не название
@@ -1140,7 +1140,7 @@ class TestMatchCategoriesEdge:
     @pytest.mark.asyncio
     async def test_category_with_none_name_skipped(self) -> None:
         """Категория с name=None в БД → не крашит dict comprehension."""
-        from src.ai.batch import match_categories
+        from src.ai.taxonomy_matching import match_categories
 
         insights = AIInsights()
         insights.content.primary_categories = ["beauty"]  # код категории
@@ -1162,7 +1162,7 @@ class TestMatchCategoriesEdge:
     @pytest.mark.asyncio
     async def test_empty_categories_list(self) -> None:
         """primary_categories=[] (пустой список) → пропуск (falsy)."""
-        from src.ai.batch import match_categories
+        from src.ai.taxonomy_matching import match_categories
 
         insights = AIInsights()
         insights.content.primary_categories = []
@@ -1176,7 +1176,7 @@ class TestMatchCategoriesEdge:
     @pytest.mark.asyncio
     async def test_empty_categories_table(self) -> None:
         """Таблица categories пуста → upsert не вызывается."""
-        from src.ai.batch import match_categories
+        from src.ai.taxonomy_matching import match_categories
 
         insights = AIInsights()
         insights.content.primary_categories = ["beauty"]  # код категории
@@ -1197,7 +1197,7 @@ class TestMatchTags:
     @pytest.mark.asyncio
     async def test_matches_known_tags(self) -> None:
         """Теги из справочника -> delete + insert в blog_tags."""
-        from src.ai.batch import match_tags
+        from src.ai.taxonomy_matching import match_tags
 
         insights = AIInsights()
         insights.tags = ["видео-контент", "reels", "юмор"]
@@ -1223,7 +1223,7 @@ class TestMatchTags:
     @pytest.mark.asyncio
     async def test_skips_unknown_tags(self) -> None:
         """Теги, отсутствующие в справочнике, пропускаются."""
-        from src.ai.batch import match_tags
+        from src.ai.taxonomy_matching import match_tags
 
         insights = AIInsights()
         insights.tags = ["видео-контент", "новый-неизвестный-тег"]
@@ -1241,7 +1241,7 @@ class TestMatchTags:
     @pytest.mark.asyncio
     async def test_empty_tags(self) -> None:
         """Пустой список тегов — нет upserts."""
-        from src.ai.batch import match_tags
+        from src.ai.taxonomy_matching import match_tags
 
         insights = AIInsights()
         insights.tags = []
@@ -1254,7 +1254,7 @@ class TestMatchTags:
     @pytest.mark.asyncio
     async def test_loads_tags_from_db_when_cache_is_none(self) -> None:
         """Если tags=None — загрузить из БД."""
-        from src.ai.batch import match_tags
+        from src.ai.taxonomy_matching import match_tags
 
         insights = AIInsights()
         insights.tags = ["видео-контент"]
@@ -1273,7 +1273,7 @@ class TestMatchTags:
     @pytest.mark.asyncio
     async def test_case_insensitive_matching(self) -> None:
         """Матчинг тегов регистронезависимый."""
-        from src.ai.batch import match_tags
+        from src.ai.taxonomy_matching import match_tags
 
         insights = AIInsights()
         insights.tags = ["Видео-контент"]  # с большой буквы
@@ -1295,7 +1295,7 @@ class TestParseResultLineLogging:
     @pytest.mark.asyncio
     async def test_confidence_logged_as_int(self) -> None:
         """confidence логируется как int, не float."""
-        from src.ai.batch import poll_batch
+        from src.ai.batch_api import poll_batch
 
         insights = _valid_insights(confidence=3)
         output_line = json.dumps({
@@ -1327,7 +1327,7 @@ class TestMatchCategoriesLogging:
         """Предупреждение если primary_category не найден в справочнике."""
         from unittest.mock import patch
 
-        from src.ai.batch import match_categories
+        from src.ai.taxonomy_matching import match_categories
 
         insights = AIInsights()
         insights.content.primary_categories = ["cooking"]
@@ -1336,7 +1336,7 @@ class TestMatchCategoriesLogging:
 
         mock_db = MagicMock()
 
-        with patch("src.ai.batch.logger") as mock_logger:
+        with patch("src.ai.taxonomy_matching.logger") as mock_logger:
             await match_categories(mock_db, "blog-1", insights, categories=categories_cache)
 
         mock_logger.warning.assert_called_once()
@@ -1349,7 +1349,7 @@ class TestMatchCategoriesLogging:
         """Предупреждение для каждого secondary_topic, не найденного в справочнике."""
         from unittest.mock import patch
 
-        from src.ai.batch import match_categories
+        from src.ai.taxonomy_matching import match_categories
 
         insights = AIInsights()
         insights.content.primary_categories = ["beauty"]
@@ -1359,7 +1359,7 @@ class TestMatchCategoriesLogging:
 
         mock_db = MagicMock()
 
-        with patch("src.ai.batch.logger") as mock_logger:
+        with patch("src.ai.taxonomy_matching.logger") as mock_logger:
             await match_categories(mock_db, "blog-1", insights, categories=categories_cache)
 
         # 1 warning за Gardening (beauty найден, fashion найден)
@@ -1372,7 +1372,7 @@ class TestMatchCategoriesLogging:
         """Нет предупреждений когда все категории найдены."""
         from unittest.mock import patch
 
-        from src.ai.batch import match_categories
+        from src.ai.taxonomy_matching import match_categories
 
         insights = AIInsights()
         insights.content.primary_categories = ["beauty"]
@@ -1382,7 +1382,7 @@ class TestMatchCategoriesLogging:
 
         mock_db = MagicMock()
 
-        with patch("src.ai.batch.logger") as mock_logger:
+        with patch("src.ai.taxonomy_matching.logger") as mock_logger:
             await match_categories(mock_db, "blog-1", insights, categories=categories_cache)
 
         mock_logger.warning.assert_not_called()
@@ -1396,7 +1396,7 @@ class TestMatchTagsLogging:
         """Предупреждение для тега, не найденного в справочнике."""
         from unittest.mock import patch
 
-        from src.ai.batch import match_tags
+        from src.ai.taxonomy_matching import match_tags
 
         insights = AIInsights()
         insights.tags = ["видео-контент", "новый-тег"]
@@ -1405,7 +1405,7 @@ class TestMatchTagsLogging:
 
         mock_db = MagicMock()
 
-        with patch("src.ai.batch.logger") as mock_logger:
+        with patch("src.ai.taxonomy_matching.logger") as mock_logger:
             await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
         assert mock_logger.warning.call_count == 1
@@ -1418,7 +1418,7 @@ class TestMatchTagsLogging:
         """Нет предупреждений когда все теги найдены."""
         from unittest.mock import patch
 
-        from src.ai.batch import match_tags
+        from src.ai.taxonomy_matching import match_tags
 
         insights = AIInsights()
         insights.tags = ["видео-контент", "reels"]
@@ -1427,7 +1427,7 @@ class TestMatchTagsLogging:
 
         mock_db = MagicMock()
 
-        with patch("src.ai.batch.logger") as mock_logger:
+        with patch("src.ai.taxonomy_matching.logger") as mock_logger:
             await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
         mock_logger.warning.assert_not_called()
@@ -1437,7 +1437,7 @@ class TestMatchTagsLogging:
         """Предупреждение для каждого пропущенного тега."""
         from unittest.mock import patch
 
-        from src.ai.batch import match_tags
+        from src.ai.taxonomy_matching import match_tags
 
         insights = AIInsights()
         insights.tags = ["видео-контент", "новый-тег-1", "новый-тег-2"]
@@ -1446,7 +1446,7 @@ class TestMatchTagsLogging:
 
         mock_db = MagicMock()
 
-        with patch("src.ai.batch.logger") as mock_logger:
+        with patch("src.ai.taxonomy_matching.logger") as mock_logger:
             await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
         assert mock_logger.warning.call_count == 2
@@ -1456,25 +1456,25 @@ class TestFuzzyLookup:
     """Тесты fuzzy matching."""
 
     def test_exact_match(self) -> None:
-        from src.ai.batch import _fuzzy_lookup
+        from src.ai.taxonomy_matching import _fuzzy_lookup
 
         cache = {"beauty": "cat-1", "fitness": "cat-2"}
         assert _fuzzy_lookup("beauty", cache) == "cat-1"
 
     def test_normalized_match_ampersand(self) -> None:
-        from src.ai.batch import _fuzzy_lookup
+        from src.ai.taxonomy_matching import _fuzzy_lookup
 
         cache = {"beauty makeup": "cat-1"}
         assert _fuzzy_lookup("beauty & makeup", cache) == "cat-1"
 
     def test_normalized_match_hyphen(self) -> None:
-        from src.ai.batch import _fuzzy_lookup
+        from src.ai.taxonomy_matching import _fuzzy_lookup
 
         cache = {"видео контент": "tag-1"}
         assert _fuzzy_lookup("видео-контент", cache) == "tag-1"
 
     def test_fuzzy_match_close(self) -> None:
-        from src.ai.batch import _fuzzy_lookup
+        from src.ai.taxonomy_matching import _fuzzy_lookup
 
         cache = {"путешествия": "cat-1"}
         # "путешествие" (единственное число) достаточно близко
@@ -1482,13 +1482,13 @@ class TestFuzzyLookup:
         assert result == "cat-1"
 
     def test_no_match(self) -> None:
-        from src.ai.batch import _fuzzy_lookup
+        from src.ai.taxonomy_matching import _fuzzy_lookup
 
         cache = {"beauty": "cat-1"}
         assert _fuzzy_lookup("программирование", cache) is None
 
     def test_empty_cache(self) -> None:
-        from src.ai.batch import _fuzzy_lookup
+        from src.ai.taxonomy_matching import _fuzzy_lookup
 
         assert _fuzzy_lookup("beauty", {}) is None
 
@@ -1498,7 +1498,7 @@ class TestMatchCategoriesFuzzy:
 
     @pytest.mark.asyncio
     async def test_fuzzy_primary_match(self) -> None:
-        from src.ai.batch import match_categories
+        from src.ai.taxonomy_matching import match_categories
 
         insights = AIInsights()
         insights.content.primary_categories = ["beauty & makeup"]
@@ -1514,7 +1514,7 @@ class TestMatchCategoriesFuzzy:
 
     @pytest.mark.asyncio
     async def test_fuzzy_tag_match(self) -> None:
-        from src.ai.batch import match_tags
+        from src.ai.taxonomy_matching import match_tags
 
         insights = AIInsights()
         insights.tags = ["видео контент"]  # пробел вместо дефиса
@@ -1533,7 +1533,7 @@ class TestMatchTagsENtoRU:
     @pytest.mark.asyncio
     async def test_en_tag_translated_to_ru(self) -> None:
         """'video-content' → матчится как 'видео-контент'."""
-        from src.ai.batch import match_tags
+        from src.ai.taxonomy_matching import match_tags
 
         insights = AIInsights()
         insights.tags = ["video-content"]
@@ -1550,7 +1550,7 @@ class TestMatchTagsENtoRU:
     @pytest.mark.asyncio
     async def test_en_tag_case_insensitive(self) -> None:
         """'Video-Content' (с большой буквы) → тоже матчится."""
-        from src.ai.batch import match_tags
+        from src.ai.taxonomy_matching import match_tags
 
         insights = AIInsights()
         insights.tags = ["Video-Content"]
@@ -1567,7 +1567,7 @@ class TestMatchTagsENtoRU:
         """Неизвестный EN тег → warning, не матчится."""
         from unittest.mock import patch
 
-        from src.ai.batch import match_tags
+        from src.ai.taxonomy_matching import match_tags
 
         insights = AIInsights()
         insights.tags = ["unknown-english-tag"]
@@ -1575,7 +1575,7 @@ class TestMatchTagsENtoRU:
         tags_cache = {"видео-контент": "tag-1"}
         mock_db = MagicMock()
 
-        with patch("src.ai.batch.logger") as mock_logger:
+        with patch("src.ai.taxonomy_matching.logger") as mock_logger:
             await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
         mock_logger.warning.assert_called_once()
@@ -1583,7 +1583,7 @@ class TestMatchTagsENtoRU:
     @pytest.mark.asyncio
     async def test_ru_tag_not_affected(self) -> None:
         """Русский тег не проходит через словарь EN→RU."""
-        from src.ai.batch import match_tags
+        from src.ai.taxonomy_matching import match_tags
 
         insights = AIInsights()
         insights.tags = ["юмор"]
@@ -1600,7 +1600,7 @@ class TestMatchTagsENtoRU:
     @pytest.mark.asyncio
     async def test_alias_video_with_latin_v_maps_to_ru(self) -> None:
         """'video-контент' (латинская v) матчится через alias."""
-        from src.ai.batch import match_tags
+        from src.ai.taxonomy_matching import match_tags
 
         insights = AIInsights()
         insights.tags = ["video-контент"]
@@ -1617,43 +1617,43 @@ class TestIsValidCity:
     """Тесты валидации строки города."""
 
     def test_valid_city(self) -> None:
-        from src.ai.batch import is_valid_city
+        from src.ai.taxonomy_matching import is_valid_city
         assert is_valid_city("Алматы") is True
 
     def test_garbage_with_percent(self) -> None:
-        from src.ai.batch import is_valid_city
+        from src.ai.taxonomy_matching import is_valid_city
         assert is_valid_city("14% Казахстан") is False
 
     def test_country_name(self) -> None:
-        from src.ai.batch import is_valid_city
+        from src.ai.taxonomy_matching import is_valid_city
         assert is_valid_city("Казахстан") is False
 
     def test_empty(self) -> None:
-        from src.ai.batch import is_valid_city
+        from src.ai.taxonomy_matching import is_valid_city
         assert is_valid_city("") is False
 
     def test_digit_in_city(self) -> None:
-        from src.ai.batch import is_valid_city
+        from src.ai.taxonomy_matching import is_valid_city
         assert is_valid_city("город 123") is False
 
     def test_short_string(self) -> None:
-        from src.ai.batch import is_valid_city
+        from src.ai.taxonomy_matching import is_valid_city
         assert is_valid_city("A") is False
 
     def test_country_case_insensitive(self) -> None:
-        from src.ai.batch import is_valid_city
+        from src.ai.taxonomy_matching import is_valid_city
         assert is_valid_city("РОССИЯ") is False
 
     def test_country_with_spaces(self) -> None:
-        from src.ai.batch import is_valid_city
+        from src.ai.taxonomy_matching import is_valid_city
         assert is_valid_city("  Казахстан  ") is False
 
     def test_valid_russian_city(self) -> None:
-        from src.ai.batch import is_valid_city
+        from src.ai.taxonomy_matching import is_valid_city
         assert is_valid_city("Астана") is True
 
     def test_percent_word(self) -> None:
-        from src.ai.batch import is_valid_city
+        from src.ai.taxonomy_matching import is_valid_city
         assert is_valid_city("50 процент") is False
 
 
@@ -1663,7 +1663,7 @@ class TestCityAliases:
     @pytest.mark.asyncio
     async def test_alias_match(self) -> None:
         """'Алмата' → матчится как 'Алматы'."""
-        from src.ai.batch import match_city
+        from src.ai.taxonomy_matching import match_city
 
         cities_cache = {"алматы": "city-1"}
         mock_db = MagicMock()
@@ -1675,7 +1675,7 @@ class TestCityAliases:
     @pytest.mark.asyncio
     async def test_normalized_alias(self) -> None:
         """'алма-ата' → матчится через алиас."""
-        from src.ai.batch import match_city
+        from src.ai.taxonomy_matching import match_city
 
         cities_cache = {"алматы": "city-1"}
         mock_db = MagicMock()
@@ -1687,7 +1687,7 @@ class TestCityAliases:
     @pytest.mark.asyncio
     async def test_no_alias_direct(self) -> None:
         """'Алматы' → работает напрямую без алиаса."""
-        from src.ai.batch import match_city
+        from src.ai.taxonomy_matching import match_city
 
         cities_cache = {"алматы": "city-1"}
         mock_db = MagicMock()
@@ -1703,7 +1703,7 @@ class TestMatchCityWithAliases:
     @pytest.mark.asyncio
     async def test_match_with_alias_upserts(self) -> None:
         """'Алмата' → blog_cities upsert вызван."""
-        from src.ai.batch import match_city
+        from src.ai.taxonomy_matching import match_city
 
         cities_cache = {"алматы": "city-almaty"}
         mock_db = MagicMock()
@@ -1722,7 +1722,7 @@ class TestMatchCityWithAliases:
     @pytest.mark.asyncio
     async def test_no_match_returns_false(self) -> None:
         """Город без алиаса и не в cache → False."""
-        from src.ai.batch import match_city
+        from src.ai.taxonomy_matching import match_city
 
         cities_cache = {"алматы": "city-1"}
         mock_db = MagicMock()
@@ -1735,7 +1735,7 @@ class TestMatchCityWithAliases:
     @pytest.mark.asyncio
     async def test_aktobe_alias(self) -> None:
         """'Актюбинск' → 'Актобе'."""
-        from src.ai.batch import match_city
+        from src.ai.taxonomy_matching import match_city
 
         cities_cache = {"актобе": "city-aktobe"}
         mock_db = MagicMock()
@@ -1750,25 +1750,25 @@ class TestNormalizeBrand:
 
     def test_typographic_apostrophe(self) -> None:
         """L\u2019Oreal → L'Oreal."""
-        from src.ai.batch import normalize_brand
+        from src.ai.taxonomy_matching import normalize_brand
 
         assert normalize_brand("L\u2019Oreal") == "L'Oreal"
 
     def test_left_single_quote(self) -> None:
         """L\u2018Oreal → L'Oreal."""
-        from src.ai.batch import normalize_brand
+        from src.ai.taxonomy_matching import normalize_brand
 
         assert normalize_brand("L\u2018Oreal") == "L'Oreal"
 
     def test_strip_whitespace(self) -> None:
         """ Zara  → Zara."""
-        from src.ai.batch import normalize_brand
+        from src.ai.taxonomy_matching import normalize_brand
 
         assert normalize_brand("  Zara  ") == "Zara"
 
     def test_dedup_brands(self) -> None:
         """Два варианта L'Oreal → один после нормализации."""
-        from src.ai.batch import normalize_brand
+        from src.ai.taxonomy_matching import normalize_brand
 
         brands = ["L\u2019Oreal", "L'Oreal", "l'oreal"]
         seen: set[str] = set()

@@ -7,7 +7,7 @@ Single-process сервис (FastAPI + polling worker + APScheduler), котор
 2. Читает задачи из таблицы `scrape_tasks` (Supabase PostgreSQL)
 3. Скрейпит Instagram через HikerAPI (SaaS) или instagrapi (локально)
 4. Загружает изображения (аватар + thumbnails постов) в Supabase Storage
-5. Отправляет профили на AI-анализ через OpenAI Batch API (gpt-5-nano)
+5. Отправляет профили на AI-анализ через OpenAI Batch API (gpt-5-mini)
 6. AI-анализ: категоризация, таксономия тегов, генерация embedding
 7. Записывает результаты обратно в Supabase
 
@@ -47,7 +47,7 @@ Single-process сервис (FastAPI + polling worker + APScheduler), котор
                     ┌─────────────▼──┐   ┌──────▼──────────┐  │
                     │ HikerAPI (SaaS)│   │  OpenAI Batch   │  │
                     │       или      │   │  API            │  │
-                    │ instagrapi     │   │  gpt-5-nano     │  │
+                    │ instagrapi     │   │  gpt-5-mini     │  │
                     │ (AccountPool)  │   └─────────────────┘  │
                     └────────────────┘                         │
                     ┌────────────────┐                         │
@@ -65,10 +65,15 @@ src/
 ├── config.py, main.py       ← Инфраструктура (конфигурация, запуск)
 ├── database.py, storage.py  ← Доступ к данным (Supabase)
 ├── image_storage.py         ← Загрузка изображений в Supabase Storage
-├── api/                     ← HTTP API (FastAPI, эндпоинты, схемы)
+├── api/                     ← HTTP API (FastAPI, эндпоинты, бизнес-логика)
+│   ├── app.py               ← FastAPI-приложение (create_app, роуты)
+│   ├── services.py          ← Бизнес-логика (find_or_create_blog, fetch_tasks_list)
+│   ├── schemas.py           ← Request/Response Pydantic-модели
+│   └── rate_limiter.py      ← In-memory sliding window rate limiter
 ├── models/                  ← Модели данных (Pydantic)
 ├── ai/                      ← AI-интеграция (OpenAI Batch, таксономия, embedding)
-│   ├── batch.py             ← OpenAI Batch API, match_categories, match_tags
+│   ├── batch_api.py         ← OpenAI Batch API (submit, poll, results)
+│   ├── taxonomy_matching.py ← match_categories, match_tags, match_city
 │   ├── embedding.py         ← text-embedding-3-small, генерация embedding
 │   ├── images.py            ← Подготовка изображений для мультимодального анализа
 │   ├── prompt.py            ← System/user prompt для AI-анализа
@@ -79,9 +84,16 @@ src/
 │       ├── hiker_scraper.py ← HikerAPI бэкенд (SaaS, SafeHikerClient)
 │       ├── scraper.py       ← instagrapi бэкенд (локальный)
 │       ├── client.py        ← AccountPool (ротация аккаунтов)
-│       ├── metrics.py       ← ER, trend, posts_per_week
+│       ├── mappers.py       ← Общие helpers маппинга (video_duration, story data)
+│       ├── metrics.py       ← ER, trend, posts_per_week, engagement helpers
 │       └── exceptions.py    ← HikerAPIError, InsufficientBalanceError
 └── worker/                  ← Оркестрация (loop, handlers, scheduler)
+    ├── loop.py              ← Polling loop, dispatch, graceful shutdown
+    ├── handlers.py          ← Re-export фасад для обработчиков
+    ├── scrape_handler.py    ← handle_full_scrape
+    ├── ai_handler.py        ← handle_ai_analysis, batch results
+    ├── discover_handler.py  ← handle_discover
+    └── scheduler.py         ← APScheduler — cron-задачи
 ```
 
 Зависимости: `api, worker → ai, platforms → models, database, config`.
@@ -200,9 +212,9 @@ CDN-URL из Instagram заменяются на постоянные Storage UR
 
 ### OpenAI Batch API
 
-1. **Накопление** — ждёт 10+ задач `ai_analysis` или самая старая > 2ч
+1. **Накопление** — ждёт batch_min_size задач `ai_analysis` (default: 10) или самая старая > 2ч
 2. **Промпт** — мультимодальный (текст профиля + до 10 изображений)
-3. **Отправка** — JSONL → OpenAI Files API → Batches API (gpt-5-nano, 24ч deadline)
+3. **Отправка** — JSONL → OpenAI Files API → Batches API (gpt-5-mini, structured outputs, 24ч deadline)
 4. **Поллинг** — APScheduler каждые 15 мин проверяет статус батчей
 5. **Результат** — `AIInsights` (structured output) → upsert в `blogs.ai_insights`
 

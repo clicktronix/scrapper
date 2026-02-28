@@ -4,7 +4,7 @@ from functools import cached_property
 from pathlib import Path
 
 from dotenv import dotenv_values
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +24,9 @@ class AccountCredentials:
     password: str
     proxy: str
     totp_seed: str = ""
+
+    def __repr__(self) -> str:
+        return f"AccountCredentials(name={self.name!r}, username={self.username!r}, password='***', totp_seed='***')"
 
 
 def _parse_account_credentials(env_file: str = ".env") -> list[AccountCredentials]:
@@ -88,6 +91,9 @@ class Settings(BaseSettings):
     batch_min_size: int = 10
     batch_model: str = "gpt-5-mini"
 
+    # AI
+    embedding_model: str = "text-embedding-3-small"
+
     # Воркер
     worker_poll_interval: int = 30
     worker_max_concurrent: int = 2
@@ -104,13 +110,15 @@ class Settings(BaseSettings):
     rescrape_days: int = 60  # Минимальный интервал между скрапами (дни)
 
     # HikerAPI (альтернативный бэкенд)
-    hikerapi_token: str = ""
+    hikerapi_token: SecretStr = SecretStr("")
     scraper_backend: str = "instagrapi"  # "instagrapi" | "hikerapi"
 
-    @cached_property
-    def instagram_accounts_list(self) -> list[str]:
-        """Парсит INSTAGRAM_ACCOUNTS='a,b,c' → ['a', 'b', 'c']."""
-        return _split_comma(self.instagram_accounts)
+    @field_validator("scraper_api_key")
+    @classmethod
+    def _check_api_key_not_default(cls, v: SecretStr) -> SecretStr:
+        if v.get_secret_value() == "sk-scraper-change-me":
+            raise ValueError("SCRAPER_API_KEY must be changed from default value")
+        return v
 
     @cached_property
     def account_credentials(self) -> list[AccountCredentials]:

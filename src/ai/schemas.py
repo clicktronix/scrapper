@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.ai.taxonomy import ALL_CATEGORY_CODES, ALL_SUBCATEGORY_NAMES, ALL_TAG_NAMES
 
@@ -280,75 +281,132 @@ class CommercialActivity(BaseModel):
     )
 
 
+class AudienceGender(BaseModel):
+    """Распределение аудитории по полу (проценты, сумма = 100)."""
+    model_config = ConfigDict(extra="forbid")
+
+    male_pct: int | None = Field(
+        ge=0, le=100, default=None,
+        description="Процент мужской аудитории (0-100). Сумма male+female+other=100.",
+    )
+    female_pct: int | None = Field(
+        ge=0, le=100, default=None,
+        description="Процент женской аудитории (0-100). Сумма male+female+other=100.",
+    )
+    other_pct: int | None = Field(
+        ge=0, le=100, default=None,
+        description="Процент неопределённого пола (0-100). Обычно 0-5%.",
+    )
+
+    @model_validator(mode="after")
+    def _warn_sum(self) -> AudienceGender:
+        vals = [v for v in (self.male_pct, self.female_pct, self.other_pct) if v is not None]
+        if vals and (total := sum(vals)) not in (0, 100):
+            logger.warning(f"[schemas] AudienceGender сумма = {total}% (ожидалось 100%)")
+        return self
+
+
+class AudienceAge(BaseModel):
+    """Распределение аудитории по возрастным группам (проценты, сумма = 100)."""
+    model_config = ConfigDict(extra="forbid")
+
+    pct_13_17: int | None = Field(
+        ge=0, le=100, default=None,
+        description="Процент аудитории 13-17 лет (0-100). "
+        "Сумма всех age-групп = 100. Определяй по контенту, "
+        "стилю комментариев, тематике (школьный контент, тренды TikTok).",
+    )
+    pct_18_24: int | None = Field(
+        ge=0, le=100, default=None,
+        description="Процент аудитории 18-24 лет (0-100). "
+        "Молодёжь: студенты, начало карьеры, тренды, мемы.",
+    )
+    pct_25_34: int | None = Field(
+        ge=0, le=100, default=None,
+        description="Процент аудитории 25-34 лет (0-100). "
+        "Молодые специалисты, молодые родители, карьерный рост.",
+    )
+    pct_35_44: int | None = Field(
+        ge=0, le=100, default=None,
+        description="Процент аудитории 35-44 лет (0-100). "
+        "Зрелая аудитория: бизнес, семья, образование детей.",
+    )
+    pct_45_plus: int | None = Field(
+        ge=0, le=100, default=None,
+        description="Процент аудитории 45+ лет (0-100). "
+        "Старшая аудитория: здоровье, путешествия, внуки.",
+    )
+
+    @model_validator(mode="after")
+    def _warn_sum(self) -> AudienceAge:
+        vals = [v for v in (
+            self.pct_13_17, self.pct_18_24, self.pct_25_34,
+            self.pct_35_44, self.pct_45_plus,
+        ) if v is not None]
+        if vals and (total := sum(vals)) not in (0, 100):
+            logger.warning(f"[schemas] AudienceAge сумма = {total}% (ожидалось 100%)")
+        return self
+
+
+class AudienceGeo(BaseModel):
+    """Географическое распределение аудитории (проценты, сумма = 100)."""
+    model_config = ConfigDict(extra="forbid")
+
+    kz_pct: int | None = Field(
+        ge=0, le=100, default=None,
+        description="Процент аудитории из Казахстана (0-100). "
+        "Сумма всех geo-процентов = 100. Определяй по языку, "
+        "геотегам, упоминаниям городов КЗ, комментариям.",
+    )
+    ru_pct: int | None = Field(
+        ge=0, le=100, default=None,
+        description="Процент аудитории из России (0-100).",
+    )
+    uz_pct: int | None = Field(
+        ge=0, le=100, default=None,
+        description="Процент аудитории из Узбекистана (0-100).",
+    )
+    other_geo_pct: int | None = Field(
+        ge=0, le=100, default=None,
+        description="Процент аудитории из других стран (0-100).",
+    )
+
+    @model_validator(mode="after")
+    def _warn_sum(self) -> AudienceGeo:
+        vals = [v for v in (
+            self.kz_pct, self.ru_pct, self.uz_pct, self.other_geo_pct,
+        ) if v is not None]
+        if vals and (total := sum(vals)) not in (0, 100):
+            logger.warning(f"[schemas] AudienceGeo сумма = {total}% (ожидалось 100%)")
+        return self
+
+
 class AudienceInference(BaseModel):
     """Предположения об аудитории на основе контента."""
     model_config = ConfigDict(extra="forbid")
 
-    audience_male_pct: int | None = Field(
-        ge=0, le=100, default=None,
-        description="Процент мужской аудитории (0-100). Сумма male+female+other=100.",
+    # Вложенные модели распределений
+    gender: AudienceGender | None = Field(
+        default=None,
+        description="Распределение аудитории по полу (проценты, сумма male+female+other=100).",
     )
-    audience_female_pct: int | None = Field(
-        ge=0, le=100, default=None,
-        description="Процент женской аудитории (0-100). Сумма male+female+other=100.",
+    age: AudienceAge | None = Field(
+        default=None,
+        description="Распределение аудитории по возрастным группам (проценты, сумма = 100).",
     )
-    audience_other_pct: int | None = Field(
-        ge=0, le=100, default=None,
-        description="Процент неопределённого пола (0-100). Обычно 0-5%.",
+    geo: AudienceGeo | None = Field(
+        default=None,
+        description="Географическое распределение аудитории (проценты, сумма = 100).",
     )
     estimated_audience_age: Literal["18-24", "25-34", "35-44", "mixed"] | None = Field(
         default=None,
         description="Возраст основной аудитории. '18-24'=молодёжь, тренды. "
         "'25-34'=карьера, семья. '35-44'=зрелый контент. 'mixed'=разнородная.",
     )
-    audience_age_13_17_pct: int | None = Field(
-        ge=0, le=100, default=None,
-        description="Процент аудитории 13-17 лет (0-100). "
-        "Сумма всех age-групп = 100. Определяй по контенту, "
-        "стилю комментариев, тематике (школьный контент, тренды TikTok).",
-    )
-    audience_age_18_24_pct: int | None = Field(
-        ge=0, le=100, default=None,
-        description="Процент аудитории 18-24 лет (0-100). "
-        "Молодёжь: студенты, начало карьеры, тренды, мемы.",
-    )
-    audience_age_25_34_pct: int | None = Field(
-        ge=0, le=100, default=None,
-        description="Процент аудитории 25-34 лет (0-100). "
-        "Молодые специалисты, молодые родители, карьерный рост.",
-    )
-    audience_age_35_44_pct: int | None = Field(
-        ge=0, le=100, default=None,
-        description="Процент аудитории 35-44 лет (0-100). "
-        "Зрелая аудитория: бизнес, семья, образование детей.",
-    )
-    audience_age_45_plus_pct: int | None = Field(
-        ge=0, le=100, default=None,
-        description="Процент аудитории 45+ лет (0-100). "
-        "Старшая аудитория: здоровье, путешествия, внуки.",
-    )
     estimated_audience_geo: Literal["kz", "ru", "uz", "cis_mixed"] | None = Field(
         default=None,
         description="География аудитории. 'kz'=Казахстан, 'ru'=Россия, "
         "'uz'=Узбекистан, 'cis_mixed'=смешанная из СНГ.",
-    )
-    audience_kz_pct: int | None = Field(
-        ge=0, le=100, default=None,
-        description="Процент аудитории из Казахстана (0-100). "
-        "Сумма всех geo-процентов = 100. Определяй по языку, "
-        "геотегам, упоминаниям городов КЗ, комментариям.",
-    )
-    audience_ru_pct: int | None = Field(
-        ge=0, le=100, default=None,
-        description="Процент аудитории из России (0-100).",
-    )
-    audience_uz_pct: int | None = Field(
-        ge=0, le=100, default=None,
-        description="Процент аудитории из Узбекистана (0-100).",
-    )
-    audience_other_geo_pct: int | None = Field(
-        ge=0, le=100, default=None,
-        description="Процент аудитории из других стран (0-100).",
     )
     geo_mentions: list[str] = Field(
         default_factory=list,
@@ -432,7 +490,7 @@ class AIInsights(BaseModel):
     )
     tags: list[TagName] = Field(
         default_factory=list,
-        min_length=3,
+        min_length=1,
         max_length=40,
         description="Теги из справочника (7-40 штук, русские). Выбирай СТРОГО из списка в промпте.",
     )

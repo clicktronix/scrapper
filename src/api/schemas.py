@@ -1,7 +1,13 @@
 """Pydantic-схемы для API скрапера."""
-from typing import Any
+import re
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+# Instagram username: латинские буквы, цифры, точка и подчёркивание
+_USERNAME_RE = re.compile(r"^[a-z0-9._]+$")
+# Хештег: буквы (вкл. кириллицу), цифры, подчёркивание
+_HASHTAG_RE = re.compile(r"^[\w\u0400-\u04FF]+$")
 
 
 class ScrapeRequest(BaseModel):
@@ -12,14 +18,19 @@ class ScrapeRequest(BaseModel):
     @field_validator("usernames")
     @classmethod
     def clean_usernames(cls, v: list[str]) -> list[str]:
-        """Очистить и дедуплицировать username-ы."""
+        """Очистить, провалидировать и дедуплицировать username-ы."""
         cleaned: list[str] = []
         seen: set[str] = set()
         for name in v:
             name = name.strip().lstrip("@").lower()
-            if name and name not in seen:
-                cleaned.append(name)
-                seen.add(name)
+            if not name or name in seen:
+                continue
+            if len(name) > 30:
+                raise ValueError(f"username too long (max 30): {name}")
+            if not _USERNAME_RE.match(name):
+                raise ValueError(f"invalid username format: {name}")
+            cleaned.append(name)
+            seen.add(name)
         if not cleaned:
             raise ValueError("usernames must not be empty after cleaning")
         return cleaned
@@ -28,16 +39,18 @@ class ScrapeRequest(BaseModel):
 class DiscoverRequest(BaseModel):
     """Запрос на создание discover задачи."""
 
-    hashtag: str
+    hashtag: str = Field(max_length=100)
     min_followers: int = Field(default=1000, ge=0)
 
     @field_validator("hashtag")
     @classmethod
     def clean_hashtag(cls, v: str) -> str:
-        """Убрать # в начале, проверить что не пустой."""
+        """Убрать # в начале, проверить формат."""
         cleaned = v.strip().lstrip("#")
         if not cleaned:
             raise ValueError("hashtag must not be empty")
+        if not _HASHTAG_RE.match(cleaned):
+            raise ValueError(f"invalid hashtag format: {cleaned}")
         return cleaned
 
 
@@ -47,7 +60,7 @@ class ScrapeTaskResult(BaseModel):
     task_id: str | None
     username: str
     blog_id: str | None  # None при ошибке
-    status: str  # "created" | "skipped" | "error"
+    status: Literal["created", "skipped", "error"]
     reason: str | None = None  # Причина пропуска (deleted, deactivated)
 
 
@@ -56,6 +69,7 @@ class ScrapeResponse(BaseModel):
 
     created: int
     skipped: int
+    errors: int = 0
     tasks: list[ScrapeTaskResult]
 
 
@@ -71,8 +85,8 @@ class TaskResponse(BaseModel):
 
     id: str
     blog_id: str | None = None
-    task_type: str
-    status: str
+    task_type: Literal["full_scrape", "ai_analysis", "discover"]
+    status: Literal["pending", "running", "done", "failed"]
     priority: int
     attempts: int = 0
     error_message: str | None = None
@@ -95,13 +109,13 @@ class RetryResponse(BaseModel):
     """Ответ на POST /api/tasks/{id}/retry."""
 
     task_id: str
-    status: str  # "retrying"
+    status: Literal["retrying"]
 
 
 class HealthResponse(BaseModel):
     """Ответ healthcheck."""
 
-    status: str
+    status: Literal["ok", "degraded"]
     accounts_total: int
     accounts_available: int
     tasks_running: int

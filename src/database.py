@@ -7,38 +7,12 @@ from typing import Any
 from loguru import logger
 from supabase import Client
 
-# Supabase Python SDK использует синхронный httpx-клиент с HTTP/2.
-# После простоя (sleep/network drop) соединения в пуле становятся «stale»,
-# и при следующем запросе ОС возвращает EAGAIN (errno 35 на macOS),
-# Connection reset (errno 54) или Broken pipe (errno 32).
-# httpx оборачивает OSError в свои исключения (httpx.ReadError и т.д.),
-# поэтому ловить голый OSError недостаточно — нужно проверять всю цепочку
-# __cause__/__context__ и строковое представление.
+from src.utils import is_transient_network_error
+
 # Retry на уровне run_in_thread покрывает ВСЕ операции с Supabase
 # (PostgREST-запросы, RPC, Storage), а не только отдельные функции.
 _RUN_IN_THREAD_MAX_RETRIES = 3
-_RUN_IN_THREAD_RETRY_DELAY = 1.0
-_TRANSIENT_OS_ERROR_CODES = {11, 32, 35, 54}
-
-
-def _is_transient_network_error(exc: BaseException) -> bool:
-    """Проверить, является ли ошибка транзиентной сетевой (EAGAIN, broken pipe и т.д.)."""
-    # Проверяем всю цепочку причин — OSError может быть обёрнут в httpx.ReadError
-    current: BaseException | None = exc
-    while current is not None:
-        if isinstance(current, OSError) and current.errno in _TRANSIENT_OS_ERROR_CODES:
-            # 11/35 = EAGAIN (Linux/macOS), 54 = Connection reset, 32 = Broken pipe
-            return True
-        current = current.__cause__ or current.__context__
-    # Fallback: строковая проверка для случаев, когда errno не доступен
-    err_str = str(exc)
-    return any(marker in err_str for marker in (
-        "Resource temporarily unavailable",
-        "Errno 11",
-        "Errno 35",
-        "Connection reset",
-        "Broken pipe",
-    ))
+_RUN_IN_THREAD_RETRY_DELAY = 2.0
 
 
 async def run_in_thread(
@@ -57,7 +31,7 @@ async def run_in_thread(
         try:
             return await asyncio.to_thread(func, *args, **kwargs)
         except Exception as e:
-            if _is_transient_network_error(e) and attempt < _RUN_IN_THREAD_MAX_RETRIES:
+            if is_transient_network_error(e) and attempt < _RUN_IN_THREAD_MAX_RETRIES:
                 logger.warning(
                     f"[run_in_thread] Транзиентная ошибка (попытка {attempt}/"
                     f"{_RUN_IN_THREAD_MAX_RETRIES}): {e}"
@@ -306,8 +280,8 @@ async def cleanup_orphan_person(db: Client, person_id: str) -> None:
             await run_in_thread(
                 db.table("persons").delete().eq("id", person_id).execute
             )
-    except Exception:
-        pass  # Не критично — orphan cleanup best-effort
+    except Exception as e:
+        logger.warning(f"[cleanup_orphan] Ошибка очистки person {person_id}: {e}")
 
 
 async def upsert_blog(db: Client, blog_id: str, data: dict) -> None:
