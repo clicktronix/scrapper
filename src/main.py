@@ -12,6 +12,8 @@ from src.api.app import create_app
 from src.config import load_settings
 from src.log_sink import create_supabase_sink
 from src.platforms.base import BaseScraper
+from src.repositories.blog_repository import SupabaseBlogRepository
+from src.repositories.task_repository import SupabaseTaskRepository
 from src.worker.loop import run_worker
 from src.worker.scheduler import create_scheduler
 
@@ -59,8 +61,14 @@ async def main() -> None:
         logger.info(f"Initialized {len(pool.accounts)} Instagram accounts")
         scrapers = {"instagram": InstagramScraper(pool, settings)}
 
+    # Репозитории
+    task_repo = SupabaseTaskRepository(db)
+    blog_repo = SupabaseBlogRepository(db)
+
     # FastAPI
     app = create_app(db, pool, settings)
+    app.state.task_repo = task_repo
+    app.state.blog_repo = blog_repo
     config = uvicorn.Config(app, host="0.0.0.0", port=settings.scraper_port, log_level="warning")
     server = uvicorn.Server(config)
 
