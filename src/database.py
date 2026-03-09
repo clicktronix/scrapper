@@ -1,13 +1,17 @@
 """CRUD-операции с Supabase для скрапера."""
 import asyncio
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, TypeVar
 
 from loguru import logger
 from supabase import Client
 
+from src.models.db_types import TaskRecord
 from src.utils import is_transient_network_error
+
+_T = TypeVar("_T")
 
 # Retry на уровне run_in_thread покрывает ВСЕ операции с Supabase
 # (PostgREST-запросы, RPC, Storage), а не только отдельные функции.
@@ -16,8 +20,8 @@ _RUN_IN_THREAD_RETRY_DELAY = 2.0
 
 
 async def run_in_thread(
-    func: Any, *args: Any, retry_transient: bool = False, **kwargs: Any
-) -> Any:
+    func: Callable[..., _T], *args: Any, retry_transient: bool = False, **kwargs: Any
+) -> _T:
     """Выполнить синхронный вызов Supabase в отдельном потоке.
 
     По умолчанию retry отключен, чтобы не дублировать неидемпотентные операции
@@ -39,6 +43,7 @@ async def run_in_thread(
                 await asyncio.sleep(_RUN_IN_THREAD_RETRY_DELAY * attempt)
                 continue
             raise
+    raise RuntimeError("Unreachable")  # для type checker
 
 
 def sanitize_error(error: str) -> str:
@@ -190,7 +195,7 @@ async def create_task_if_not_exists(
     return None
 
 
-async def fetch_pending_tasks(db: Client, limit: int = 10) -> list[dict]:
+async def fetch_pending_tasks(db: Client, limit: int = 10) -> list[TaskRecord]:
     """Получить pending задачи, готовые к обработке (один запрос с or-фильтром)."""
     now = datetime.now(UTC).isoformat()
     result = await run_in_thread(
