@@ -1,8 +1,8 @@
 """Матчинг категорий, тегов и городов с таксономией из БД."""
 import re
-from difflib import get_close_matches
 
 from loguru import logger
+from rapidfuzz import fuzz
 from supabase import Client
 
 from src.ai.schemas import AIInsights
@@ -64,8 +64,8 @@ def normalize_lookup_key(key: str) -> str:
     return " ".join(normalized.split())
 
 
-def _fuzzy_lookup(key: str, cache: dict[str, str], cutoff: float = 0.8) -> str | None:
-    """Поиск в кэше: exact → normalized variants → fuzzy."""
+def _fuzzy_lookup(key: str, cache: dict[str, str], cutoff: float = 80.0) -> str | None:
+    """Поиск в кэше: exact → normalized variants → fuzzy (rapidfuzz)."""
     # 1. Exact
     if key in cache:
         return cache[key]
@@ -83,10 +83,16 @@ def _fuzzy_lookup(key: str, cache: dict[str, str], cutoff: float = 0.8) -> str |
         if variant in cache:
             return cache[variant]
 
-    # 3. Fuzzy (difflib)
-    matches = get_close_matches(normalized, cache.keys(), n=1, cutoff=cutoff)
-    if matches:
-        return cache[matches[0]]
+    # 3. Fuzzy (rapidfuzz) — быстрее difflib в 10-100x
+    best_score = 0.0
+    best_key: str | None = None
+    for cached_key in cache:
+        score = fuzz.ratio(normalized, cached_key)
+        if score > best_score:
+            best_score = score
+            best_key = cached_key
+    if best_key is not None and best_score >= cutoff:
+        return cache[best_key]
     return None
 
 

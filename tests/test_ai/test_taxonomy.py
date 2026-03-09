@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.ai.taxonomy_matching import (
+    _fuzzy_lookup,
     invalidate_taxonomy_cache,
     load_categories,
     load_cities,
@@ -233,6 +234,28 @@ class TestTags:
         text = get_tags_for_prompt()
         for group in TAGS:
             assert group in text
+
+
+class TestFuzzyLookup:
+    """Тесты _fuzzy_lookup с rapidfuzz."""
+
+    def test_exact_match(self) -> None:
+        cache = {"красота": "id1", "мода": "id2"}
+        assert _fuzzy_lookup("красота", cache) == "id1"
+
+    def test_normalized_variant_match(self) -> None:
+        cache = {"видео контент": "id1"}
+        assert _fuzzy_lookup("видео-контент", cache) == "id1"
+
+    def test_fuzzy_close_match(self) -> None:
+        """Опечатка: 'професиональная' (одна с) должна матчиться."""
+        cache = {"профессиональная съёмка": "id1"}
+        result = _fuzzy_lookup("професиональная съёмка", cache)
+        assert result == "id1"
+
+    def test_no_match_returns_none(self) -> None:
+        cache = {"красота": "id1"}
+        assert _fuzzy_lookup("абсолютно другое", cache) is None
 
 
 class TestTaxonomyCache:
