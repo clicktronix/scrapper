@@ -128,16 +128,26 @@ async def fetch_tasks_list(
     offset: int = 0,
 ) -> dict[str, Any]:
     """Получить список задач с фильтрами и пагинацией."""
-    query = db.table("scrape_tasks").select("*", count=CountMethod.exact)
-    if status:
-        query = query.eq("status", status)
-    if task_type:
-        query = query.eq("task_type", task_type)
-    query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
-    result = await run_in_thread(query.execute)
-    return {
-        "tasks": result.data,
-        "total": result.count or 0,
-        "limit": limit,
-        "offset": offset,
-    }
+    try:
+        query = db.table("scrape_tasks").select("*", count=CountMethod.exact)
+        if status:
+            query = query.eq("status", status)
+        if task_type:
+            query = query.eq("task_type", task_type)
+        query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
+        result = await run_in_thread(query.execute)
+        return {
+            "tasks": result.data,
+            "total": result.count or 0,
+            "limit": limit,
+            "offset": offset,
+        }
+    except Exception as e:
+        logger.error(f"[tasks_list] Ошибка получения задач: {e}")
+        return {
+            "tasks": [],
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+            "error": str(e),
+        }

@@ -43,7 +43,18 @@ async def run_in_thread(
 
 def sanitize_error(error: str) -> str:
     """Убрать потенциальные креденшалы из сообщения об ошибке."""
-    return re.sub(r"://[^@\s]+@", "://***:***@", error)
+    # URL credentials (user:pass@host)
+    result = re.sub(r"://[^@\s]+@", "://***:***@", error)
+    # Bearer tokens
+    result = re.sub(r"Bearer\s+\S+", "Bearer ***", result)
+    # Query parameters с ключами (token, api_key, key, secret, password)
+    result = re.sub(
+        r"((?:token|api_key|key|secret|password|apikey)=)[^&\s]+",
+        r"\1***",
+        result,
+        flags=re.IGNORECASE,
+    )
+    return result
 
 
 def get_backoff_seconds(attempts: int) -> int:
