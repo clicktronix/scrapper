@@ -1,6 +1,5 @@
 """Бизнес-логика API скрапера — вынесена из route handlers."""
 import time
-from typing import Any
 
 from fastapi import Response
 from loguru import logger
@@ -10,6 +9,7 @@ from supabase import Client
 
 from src.api.schemas import HealthResponse
 from src.database import cleanup_orphan_person, run_in_thread
+from src.models.db_types import TaskListResultWithError
 from src.platforms.instagram.client import AccountPool
 
 
@@ -126,7 +126,7 @@ async def fetch_tasks_list(
     task_type: str | None = None,
     limit: int = 20,
     offset: int = 0,
-) -> dict[str, Any]:
+) -> TaskListResultWithError:
     """Получить список задач с фильтрами и пагинацией."""
     try:
         query = db.table("scrape_tasks").select("*", count=CountMethod.exact)
