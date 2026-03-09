@@ -9,6 +9,7 @@ from src.ai.schemas import AIInsights
 from src.database import run_in_thread
 
 __all__ = [
+    "invalidate_taxonomy_cache",
     "is_valid_city",
     "load_categories",
     "load_cities",
@@ -19,6 +20,20 @@ __all__ = [
     "normalize_brand",
     "normalize_lookup_key",
 ]
+
+# In-memory кэш для справочников (сбрасывается при рестарте или вручную)
+_categories_cache: dict[str, str] | None = None
+_tags_cache: dict[str, str] | None = None
+_cities_cache: dict[str, str] | None = None
+
+
+def invalidate_taxonomy_cache() -> None:
+    """Сбросить кэш справочников. Вызывать при обновлении таксономии."""
+    global _categories_cache, _tags_cache, _cities_cache
+    _categories_cache = None
+    _tags_cache = None
+    _cities_cache = None
+
 
 _TAG_ALIASES: dict[str, str] = {
     # Русские варианты / сокращения (EN→RU перевод — в _EN_TO_RU_TAGS)
@@ -76,12 +91,16 @@ def _fuzzy_lookup(key: str, cache: dict[str, str], cutoff: float = 0.8) -> str |
 
 
 async def load_categories(db: Client) -> dict[str, str]:
-    """Загрузить все категории из БД.
+    """Загрузить все категории из БД (с in-memory кэшем).
 
     Возвращает {key: category_id} где:
     - key = code (для верхнеуровневых, AI возвращает код в primary_categories)
     - key = name_lower (для всех, подкатегории матчатся по имени)
     """
+    global _categories_cache
+    if _categories_cache is not None:
+        return _categories_cache
+
     cat_result = await run_in_thread(
         db.table("categories").select("id, code, name, parent_id").execute
     )
@@ -100,6 +119,7 @@ async def load_categories(db: Client) -> dict[str, str]:
         name = c.get("name")
         if isinstance(name, str):
             categories[normalize_lookup_key(name)] = cat_id
+    _categories_cache = categories
     return categories
 
 
@@ -301,13 +321,17 @@ def normalize_brand(name: str) -> str:
 
 
 async def load_cities(db: Client) -> dict[str, str]:
-    """Загрузить города из БД.
+    """Загрузить города из БД (с in-memory кэшем).
 
     Возвращает {normalized_name: city_id} с индексацией по:
     - name (английское, например 'almaty')
     - l10n.ru (русское, например 'алматы')
     - l10n.kk (казахское)
     """
+    global _cities_cache
+    if _cities_cache is not None:
+        return _cities_cache
+
     result = await run_in_thread(
         db.table("cities").select("id, name, l10n").execute
     )
@@ -328,6 +352,7 @@ async def load_cities(db: Client) -> dict[str, str]:
             for lang_name in l10n.values():
                 if isinstance(lang_name, str) and lang_name:
                     cities[normalize_lookup_key(lang_name)] = city_id
+    _cities_cache = cities
     return cities
 
 
@@ -359,7 +384,11 @@ async def match_city(
 
 
 async def load_tags(db: Client) -> dict[str, str]:
-    """Загрузить активные теги из БД. Возвращает {name_lower: tag_id}."""
+    """Загрузить активные теги из БД (с in-memory кэшем). Возвращает {name_lower: tag_id}."""
+    global _tags_cache
+    if _tags_cache is not None:
+        return _tags_cache
+
     result = await run_in_thread(
         db.table("tags").select("id, name").eq("status", "active").execute
     )
@@ -371,6 +400,7 @@ async def load_tags(db: Client) -> dict[str, str]:
         tag_id = t.get("id")
         if isinstance(name, str) and isinstance(tag_id, str):
             tags[normalize_lookup_key(name)] = tag_id
+    _tags_cache = tags
     return tags
 
 
