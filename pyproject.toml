@@ -44,7 +44,15 @@ target-version = "py313"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP"]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "ASYNC"]
+ignore = [
+    "B008",    # function-call-in-default-argument (FastAPI Depends)
+    "SIM108",  # use-ternary-operator (часто менее читабельно)
+    "RUF001",  # ambiguous-unicode-character-string (кириллица в строках — ожидаемо)
+    "RUF002",  # ambiguous-unicode-character-docstring (кириллица в docstrings — ожидаемо)
+    "RUF003",  # ambiguous-unicode-character-comment (кириллица в комментариях — ожидаемо)
+    "RUF012",  # mutable-class-default (Pydantic models)
+]
 
 [tool.pyright]
 pythonVersion = "3.13"

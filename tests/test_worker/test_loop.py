@@ -281,7 +281,7 @@ class TestRunWorker:
                 await asyncio.sleep(0.1)
                 shutdown_event.set()
 
-            asyncio.create_task(stop_soon())
+            stop_task = asyncio.create_task(stop_soon())  # noqa: F841, RUF006
 
             await run_worker(mock_db, {}, settings, shutdown_event, mock_openai)
 
@@ -459,7 +459,7 @@ class TestRunWorker:
             shutdown_event.set()
             return []
 
-        async def fast_wait(tasks, timeout=None):
+        async def fast_wait(tasks, timeout=None):  # noqa: ASYNC109
             """Имитация asyncio.wait с мгновенным таймаутом — все задачи pending."""
             # Не ждём — сразу возвращаем все как pending
             return set(), set(tasks)

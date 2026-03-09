@@ -16,11 +16,11 @@ from src.config import Settings
 from src.models.blog import ScrapedProfile
 
 __all__ = [
-    "BatchResult",
     "TERMINAL_WITH_RESULTS",
+    "BatchResult",
     "build_batch_request",
-    "submit_batch",
     "poll_batch",
+    "submit_batch",
 ]
 
 # В результатах батча: AIInsights | ("refusal", reason) | None (ошибка API)
@@ -225,7 +225,7 @@ async def submit_batch(
                 clean_results.append({})
             else:
                 clean_results.append(r)
-        for (blog_id, _), img_map in zip(profiles_for_images, clean_results):
+        for (blog_id, _), img_map in zip(profiles_for_images, clean_results, strict=False):
             image_maps_by_id[blog_id] = img_map
     total_downloaded = sum(len(m) for m in image_maps_by_id.values())
     logger.info(f"[batch] Скачано {total_downloaded} изображений для {len(profiles_for_images)} профилей")

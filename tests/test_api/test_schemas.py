@@ -12,18 +12,20 @@ class TestScrapeRequest:
 
     def test_empty_usernames_rejected(self) -> None:
         import pytest
+        from pydantic import ValidationError
 
         from src.api.schemas import ScrapeRequest
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             ScrapeRequest(usernames=[])
 
     def test_over_100_usernames_rejected(self) -> None:
         import pytest
+        from pydantic import ValidationError
 
         from src.api.schemas import ScrapeRequest
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             ScrapeRequest(usernames=[f"user{i}" for i in range(101)])
 
     def test_exactly_100_accepted(self) -> None:
@@ -81,26 +83,29 @@ class TestDiscoverRequest:
 
     def test_empty_hashtag_rejected(self) -> None:
         import pytest
+        from pydantic import ValidationError
 
         from src.api.schemas import DiscoverRequest
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             DiscoverRequest(hashtag="")
 
     def test_only_hash_rejected(self) -> None:
         import pytest
+        from pydantic import ValidationError
 
         from src.api.schemas import DiscoverRequest
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             DiscoverRequest(hashtag="#")
 
     def test_whitespace_only_rejected(self) -> None:
         import pytest
+        from pydantic import ValidationError
 
         from src.api.schemas import DiscoverRequest
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             DiscoverRequest(hashtag="   ")
 
 

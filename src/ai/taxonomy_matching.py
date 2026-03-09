@@ -9,15 +9,15 @@ from src.ai.schemas import AIInsights
 from src.database import run_in_thread
 
 __all__ = [
-    "normalize_lookup_key",
-    "normalize_brand",
     "is_valid_city",
     "load_categories",
-    "load_tags",
     "load_cities",
+    "load_tags",
     "match_categories",
-    "match_tags",
     "match_city",
+    "match_tags",
+    "normalize_brand",
+    "normalize_lookup_key",
 ]
 
 _TAG_ALIASES: dict[str, str] = {
@@ -265,9 +265,7 @@ def is_valid_city(city_name: str) -> bool:
         return False
     if _CITY_GARBAGE_PATTERN.search(city_name):
         return False
-    if city_name.strip().lower() in _COUNTRY_NAMES:
-        return False
-    return True
+    return city_name.strip().lower() not in _COUNTRY_NAMES
 
 
 _CITY_ALIASES: dict[str, str] = {

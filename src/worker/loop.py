@@ -1,5 +1,6 @@
 """Основной цикл воркера — polling + обработка задач."""
 import asyncio
+import contextlib
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -183,18 +184,16 @@ async def run_worker(
             logger.exception(f"Error in worker loop: {e}")
 
         # Ждём poll_interval или shutdown
-        try:
+        with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(
                 shutdown_event.wait(),
                 timeout=settings.worker_poll_interval,
             )
-        except TimeoutError:
-            pass  # Нормальный таймаут — продолжаем цикл
 
     # Graceful shutdown: дождаться завершения активных задач
     if active_tasks:
         logger.info(f"Waiting for {len(active_tasks)} active tasks to finish...")
-        done, pending = await asyncio.wait(active_tasks, timeout=30)
+        _done, pending = await asyncio.wait(active_tasks, timeout=30)
         if pending:
             logger.warning(f"Cancelling {len(pending)} tasks that didn't finish in 30s")
             for t in pending:

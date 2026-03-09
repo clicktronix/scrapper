@@ -551,7 +551,7 @@ async def handle_batch_results(
         logger.warning(
             f"[batch_results] Batch {batch_id} {result['status']}, retrying tasks"
         )
-        for blog_id, val in task_ids_by_blog.items():
+        for _blog_id, val in task_ids_by_blog.items():
             items = val if isinstance(val, list) else [val]
             for item in items:
                 if isinstance(item, dict):
