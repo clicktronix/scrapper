@@ -3,7 +3,7 @@ import asyncio
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any, TypeVar
+from typing import Any
 
 from loguru import logger
 from supabase import Client
@@ -11,17 +11,15 @@ from supabase import Client
 from src.models.db_types import TaskRecord
 from src.utils import is_transient_network_error
 
-_T = TypeVar("_T")
-
 # Retry на уровне run_in_thread покрывает ВСЕ операции с Supabase
 # (PostgREST-запросы, RPC, Storage), а не только отдельные функции.
 _RUN_IN_THREAD_MAX_RETRIES = 3
 _RUN_IN_THREAD_RETRY_DELAY = 2.0
 
 
-async def run_in_thread(
-    func: Callable[..., _T], *args: Any, retry_transient: bool = False, **kwargs: Any
-) -> _T:
+async def run_in_thread[T](
+    func: Callable[..., T], *args: Any, retry_transient: bool = False, **kwargs: Any
+) -> T:
     """Выполнить синхронный вызов Supabase в отдельном потоке.
 
     По умолчанию retry отключен, чтобы не дублировать неидемпотентные операции
