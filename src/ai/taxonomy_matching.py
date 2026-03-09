@@ -1,4 +1,5 @@
 """Матчинг категорий, тегов и городов с таксономией из БД."""
+import asyncio
 import re
 
 from loguru import logger
@@ -25,6 +26,7 @@ __all__ = [
 _categories_cache: dict[str, str] | None = None
 _tags_cache: dict[str, str] | None = None
 _cities_cache: dict[str, str] | None = None
+_cache_lock = asyncio.Lock()
 
 
 def invalidate_taxonomy_cache() -> None:
@@ -107,26 +109,31 @@ async def load_categories(db: Client) -> dict[str, str]:
     if _categories_cache is not None:
         return _categories_cache
 
-    cat_result = await run_in_thread(
-        db.table("categories").select("id, code, name, parent_id").execute
-    )
-    categories: dict[str, str] = {}
-    for c in cat_result.data:
-        if not isinstance(c, dict):
-            continue
-        cat_id = c.get("id")
-        if not isinstance(cat_id, str):
-            continue
-        # Верхнеуровневые категории — индексируем по code
-        code = c.get("code")
-        if isinstance(code, str) and code:
-            categories[normalize_lookup_key(code)] = cat_id
-        # Все категории — индексируем по name_lower
-        name = c.get("name")
-        if isinstance(name, str):
-            categories[normalize_lookup_key(name)] = cat_id
-    _categories_cache = categories
-    return categories
+    async with _cache_lock:
+        # Double-check после захвата лока
+        if _categories_cache is not None:
+            return _categories_cache
+
+        cat_result = await run_in_thread(
+            db.table("categories").select("id, code, name, parent_id").execute
+        )
+        categories: dict[str, str] = {}
+        for c in cat_result.data:
+            if not isinstance(c, dict):
+                continue
+            cat_id = c.get("id")
+            if not isinstance(cat_id, str):
+                continue
+            # Верхнеуровневые категории — индексируем по code
+            code = c.get("code")
+            if isinstance(code, str) and code:
+                categories[normalize_lookup_key(code)] = cat_id
+            # Все категории — индексируем по name_lower
+            name = c.get("name")
+            if isinstance(name, str):
+                categories[normalize_lookup_key(name)] = cat_id
+        _categories_cache = categories
+        return categories
 
 
 async def match_categories(
@@ -338,28 +345,33 @@ async def load_cities(db: Client) -> dict[str, str]:
     if _cities_cache is not None:
         return _cities_cache
 
-    result = await run_in_thread(
-        db.table("cities").select("id, name, l10n").execute
-    )
-    cities: dict[str, str] = {}
-    for c in result.data:
-        if not isinstance(c, dict):
-            continue
-        city_id = c.get("id")
-        if not isinstance(city_id, str):
-            continue
-        # Английское название
-        name = c.get("name")
-        if isinstance(name, str):
-            cities[normalize_lookup_key(name)] = city_id
-        # Локализованные названия (ru, kk, en)
-        l10n = c.get("l10n")
-        if isinstance(l10n, dict):
-            for lang_name in l10n.values():
-                if isinstance(lang_name, str) and lang_name:
-                    cities[normalize_lookup_key(lang_name)] = city_id
-    _cities_cache = cities
-    return cities
+    async with _cache_lock:
+        # Double-check после захвата лока
+        if _cities_cache is not None:
+            return _cities_cache
+
+        result = await run_in_thread(
+            db.table("cities").select("id, name, l10n").execute
+        )
+        cities: dict[str, str] = {}
+        for c in result.data:
+            if not isinstance(c, dict):
+                continue
+            city_id = c.get("id")
+            if not isinstance(city_id, str):
+                continue
+            # Английское название
+            name = c.get("name")
+            if isinstance(name, str):
+                cities[normalize_lookup_key(name)] = city_id
+            # Локализованные названия (ru, kk, en)
+            l10n = c.get("l10n")
+            if isinstance(l10n, dict):
+                for lang_name in l10n.values():
+                    if isinstance(lang_name, str) and lang_name:
+                        cities[normalize_lookup_key(lang_name)] = city_id
+        _cities_cache = cities
+        return cities
 
 
 async def match_city(
@@ -395,19 +407,24 @@ async def load_tags(db: Client) -> dict[str, str]:
     if _tags_cache is not None:
         return _tags_cache
 
-    result = await run_in_thread(
-        db.table("tags").select("id, name").eq("status", "active").execute
-    )
-    tags: dict[str, str] = {}
-    for t in result.data:
-        if not isinstance(t, dict):
-            continue
-        name = t.get("name")
-        tag_id = t.get("id")
-        if isinstance(name, str) and isinstance(tag_id, str):
-            tags[normalize_lookup_key(name)] = tag_id
-    _tags_cache = tags
-    return tags
+    async with _cache_lock:
+        # Double-check после захвата лока
+        if _tags_cache is not None:
+            return _tags_cache
+
+        result = await run_in_thread(
+            db.table("tags").select("id, name").eq("status", "active").execute
+        )
+        tags: dict[str, str] = {}
+        for t in result.data:
+            if not isinstance(t, dict):
+                continue
+            name = t.get("name")
+            tag_id = t.get("id")
+            if isinstance(name, str) and isinstance(tag_id, str):
+                tags[normalize_lookup_key(name)] = tag_id
+        _tags_cache = tags
+        return tags
 
 
 async def match_tags(

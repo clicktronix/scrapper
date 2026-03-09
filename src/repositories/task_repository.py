@@ -6,32 +6,8 @@ from typing import Any
 from loguru import logger
 from supabase import Client
 
-from src.database import get_backoff_seconds, run_in_thread, sanitize_error
+from src.database import _extract_rpc_scalar, get_backoff_seconds, run_in_thread, sanitize_error
 from src.models.db_types import TaskRecord
-
-
-def _extract_rpc_scalar(data: Any) -> Any:
-    """Extract scalar value from Supabase RPC response."""
-    if isinstance(data, list):
-        if not data:
-            return None
-        first_item = data[0]
-        if isinstance(first_item, dict):
-            if not first_item:
-                return None
-            if len(first_item) == 1:
-                return next(iter(first_item.values()))
-            return first_item
-        return first_item
-
-    if isinstance(data, dict):
-        if not data:
-            return None
-        if len(data) == 1:
-            return next(iter(data.values()))
-        return data
-
-    return data
 
 
 class SupabaseTaskRepository:

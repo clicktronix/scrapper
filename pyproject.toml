@@ -58,3 +58,9 @@ ignore = [
 [tool.pyright]
 pythonVersion = "3.13"
 typeCheckingMode = "standard"
+
+[dependency-groups]
+dev = [
+    "openpyxl>=3.1.5",
+    "pandas>=3.0.1",
+]
