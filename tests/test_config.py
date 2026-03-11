@@ -90,6 +90,20 @@ class TestSettings:
         assert s.log_level == "INFO"
         assert s.instagram_accounts == ""
 
+    def test_pre_filter_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Дефолтные значения pre-filter параметров."""
+        monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+        monkeypatch.setenv("SUPABASE_SERVICE_KEY", "test-key")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("SCRAPER_API_KEY", "test-key")
+
+        from src.config import Settings
+
+        s = Settings(_env_file=None)
+        assert s.pre_filter_min_likes == 30
+        assert s.pre_filter_max_inactive_days == 180
+        assert s.pre_filter_posts_to_check == 5
+
     def test_extra_env_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Неизвестные переменные не ломают Settings (extra='ignore')."""
         monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")

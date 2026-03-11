@@ -1,7 +1,7 @@
 """Обработчик задач скрапинга профилей."""
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from instagrapi.exceptions import UserNotFound
 from loguru import logger
@@ -17,6 +17,13 @@ from src.platforms.instagram.exceptions import (
     InsufficientBalanceError,
     PrivateAccountError,
 )
+
+
+def _as_row_dict(value: Any) -> dict[str, Any]:
+    """Нормализовать JSON-строку ответа Supabase к dict."""
+    if isinstance(value, dict):
+        return cast(dict[str, Any], value)
+    return {}
 
 
 def _normalize_username(username: str) -> str:
@@ -125,9 +132,17 @@ async def handle_full_scrape(
                                   "Blog not found", retry=False)
         return
 
-    username = blog_result.data[0]["username"]
-    person_id = blog_result.data[0].get("person_id")
-    scrape_status = blog_result.data[0].get("scrape_status")
+    blog_row = _as_row_dict(blog_result.data[0])
+    username_value = blog_row.get("username")
+    if not isinstance(username_value, str) or not username_value:
+        await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
+                                  "Blog username is missing", retry=False)
+        return
+    username = username_value
+    person_id_raw = blog_row.get("person_id")
+    person_id = person_id_raw if isinstance(person_id_raw, str) else None
+    scrape_status_raw = blog_row.get("scrape_status")
+    scrape_status = scrape_status_raw if isinstance(scrape_status_raw, str) else None
 
     # Блог деактивирован/удалён — не скрапить
     if scrape_status in ("deleted", "deactivated"):

@@ -10,6 +10,25 @@ _USERNAME_RE = re.compile(r"^[a-z0-9._]+$")
 _HASHTAG_RE = re.compile(r"^[\w\u0400-\u04FF]+$")
 
 
+def _clean_usernames(v: list[str]) -> list[str]:
+    """Очистить, провалидировать и дедуплицировать username-ы."""
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for name in v:
+        name = name.strip().lstrip("@").lower()
+        if not name or name in seen:
+            continue
+        if len(name) > 30:
+            raise ValueError(f"username too long (max 30): {name}")
+        if not _USERNAME_RE.match(name):
+            raise ValueError(f"invalid username format: {name}")
+        cleaned.append(name)
+        seen.add(name)
+    if not cleaned:
+        raise ValueError("usernames must not be empty after cleaning")
+    return cleaned
+
+
 class ScrapeRequest(BaseModel):
     """Запрос на создание full_scrape задач."""
 
@@ -18,22 +37,7 @@ class ScrapeRequest(BaseModel):
     @field_validator("usernames")
     @classmethod
     def clean_usernames(cls, v: list[str]) -> list[str]:
-        """Очистить, провалидировать и дедуплицировать username-ы."""
-        cleaned: list[str] = []
-        seen: set[str] = set()
-        for name in v:
-            name = name.strip().lstrip("@").lower()
-            if not name or name in seen:
-                continue
-            if len(name) > 30:
-                raise ValueError(f"username too long (max 30): {name}")
-            if not _USERNAME_RE.match(name):
-                raise ValueError(f"invalid username format: {name}")
-            cleaned.append(name)
-            seen.add(name)
-        if not cleaned:
-            raise ValueError("usernames must not be empty after cleaning")
-        return cleaned
+        return _clean_usernames(v)
 
 
 class DiscoverRequest(BaseModel):
@@ -73,6 +77,27 @@ class ScrapeResponse(BaseModel):
     tasks: list[ScrapeTaskResult]
 
 
+class PreFilterRequest(BaseModel):
+    """Запрос на создание pre_filter задач."""
+
+    usernames: list[str] = Field(min_length=1, max_length=100)
+
+    # Переиспользуем ту же логику очистки, что и в ScrapeRequest
+    @field_validator("usernames")
+    @classmethod
+    def clean_usernames(cls, v: list[str]) -> list[str]:
+        return _clean_usernames(v)
+
+
+class PreFilterResponse(BaseModel):
+    """Ответ на POST /api/tasks/pre_filter."""
+
+    created: int
+    skipped: int
+    errors: int = 0
+    tasks: list[ScrapeTaskResult]
+
+
 class DiscoverResponse(BaseModel):
     """Ответ на POST /api/tasks/discover."""
 
@@ -85,7 +110,7 @@ class TaskResponse(BaseModel):
 
     id: str
     blog_id: str | None = None
-    task_type: Literal["full_scrape", "ai_analysis", "discover"]
+    task_type: Literal["full_scrape", "ai_analysis", "discover", "pre_filter"]
     status: Literal["pending", "running", "done", "failed"]
     priority: int
     attempts: int = 0

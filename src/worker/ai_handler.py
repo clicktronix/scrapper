@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 from openai import AsyncOpenAI
@@ -131,13 +131,16 @@ async def _load_profiles_for_batch(
     )
 
     # Индексация по blog_id
-    blogs_by_id: dict[str, dict[str, Any]] = {b["id"]: b for b in blogs_result.data}
+    blog_rows = cast(list[dict[str, Any]], blogs_result.data or [])
+    post_rows = cast(list[dict[str, Any]], posts_result.data or [])
+    highlight_rows = cast(list[dict[str, Any]], highlights_result.data or [])
+    blogs_by_id: dict[str, dict[str, Any]] = {str(b["id"]): b for b in blog_rows}
     posts_by_blog: dict[str, list[dict[str, Any]]] = {}
-    for p in posts_result.data:
-        posts_by_blog.setdefault(p["blog_id"], []).append(p)
+    for p in post_rows:
+        posts_by_blog.setdefault(str(p["blog_id"]), []).append(p)
     highlights_by_blog: dict[str, list[dict[str, Any]]] = {}
-    for h in highlights_result.data:
-        highlights_by_blog.setdefault(h["blog_id"], []).append(h)
+    for h in highlight_rows:
+        highlights_by_blog.setdefault(str(h["blog_id"]), []).append(h)
 
     profiles: list[tuple[str, ScrapedProfile]] = []
     task_ids: list[str] = []
@@ -265,7 +268,7 @@ async def handle_ai_analysis(
         .limit(100)
         .execute
     )
-    pending_tasks = pending_result.data
+    pending_tasks = cast(list[dict[str, Any]], pending_result.data or [])
 
     # Гарантируем что текущая задача включена (защита от гонки с параллельным worker'ом)
     if not any(t["id"] == task["id"] for t in pending_tasks):
@@ -590,7 +593,8 @@ async def handle_batch_results(
             )
             .in_("id", blog_ids_with_results).execute
         )
-        current_by_id = {b["id"]: b for b in current_blogs.data}
+        current_rows = cast(list[dict[str, Any]], current_blogs.data or [])
+        current_by_id = {str(b["id"]): b for b in current_rows}
 
     processed_blog_ids: set[str] = set()
     ctx = BatchContext(

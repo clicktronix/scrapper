@@ -42,6 +42,7 @@ class TestTaskHandlersRegistry:
         assert _resolve_handler("full_scrape") is not None
         assert _resolve_handler("ai_analysis") is not None
         assert _resolve_handler("discover") is not None
+        assert _resolve_handler("pre_filter") is not None
 
     def test_resolve_handler_unknown_returns_none(self) -> None:
         from src.worker.loop import _resolve_handler
@@ -62,6 +63,17 @@ class TestTaskHandlersRegistry:
         from src.worker.loop import TASK_DEPS
 
         assert "scraper" in TASK_DEPS["discover"]
+
+    def test_pre_filter_requires_scraper(self) -> None:
+        from src.worker.loop import TASK_DEPS
+
+        assert "scraper" in TASK_DEPS["pre_filter"]
+
+    def test_resolve_handler_pre_filter(self) -> None:
+        from src.worker.loop import _resolve_handler
+
+        handler = _resolve_handler("pre_filter")
+        assert handler is not None
 
 
 class TestProcessTask:

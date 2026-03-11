@@ -87,6 +87,11 @@ class Settings(BaseSettings):
     comments_to_fetch: int = 10       # Комментариев на пост
     posts_with_comments: int = 3      # Постов с комментариями
 
+    # Pre-filter параметры
+    pre_filter_min_likes: int = 30
+    pre_filter_max_inactive_days: int = 180
+    pre_filter_posts_to_check: int = 5
+
     # AI Batch
     batch_min_size: int = 10
     batch_model: str = "gpt-5-mini"

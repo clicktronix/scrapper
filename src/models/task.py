@@ -9,8 +9,8 @@ class ScrapeTask(BaseModel):
     """Задача из таблицы scrape_tasks."""
 
     id: str
-    blog_id: str | None  # None для discover-задач
-    task_type: Literal["full_scrape", "ai_analysis", "discover"]
+    blog_id: str | None  # None для discover/pre_filter задач
+    task_type: Literal["full_scrape", "ai_analysis", "discover", "pre_filter"]
     status: Literal["pending", "running", "done", "failed"]
     priority: int
     payload: dict[str, Any] = {}

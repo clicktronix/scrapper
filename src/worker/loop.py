@@ -10,12 +10,14 @@ from supabase import Client
 
 from src.config import Settings
 from src.database import fetch_pending_tasks, mark_task_failed
+from src.models.db_types import TaskRecord
 from src.platforms.base import BaseScraper
 from src.worker.handlers import (
     handle_ai_analysis,
     handle_discover,
     handle_full_scrape,
 )
+from src.worker.pre_filter_handler import handle_pre_filter
 
 # Тип handler-функции для type safety
 type TaskHandler = Callable[..., Coroutine[Any, Any, None]]
@@ -26,6 +28,7 @@ TASK_DEPS: dict[str, list[str]] = {
     "full_scrape": ["scraper"],
     "ai_analysis": ["openai"],
     "discover": ["scraper"],
+    "pre_filter": ["scraper"],
 }
 
 
@@ -39,6 +42,7 @@ def _resolve_handler(task_type: str) -> TaskHandler | None:
         "full_scrape": handle_full_scrape,
         "ai_analysis": handle_ai_analysis,
         "discover": handle_discover,
+        "pre_filter": handle_pre_filter,
     }
     return dispatch.get(task_type)
 
@@ -68,7 +72,7 @@ async def _get_scraper(
 
 async def process_task(
     db: Client,
-    task: dict[str, Any],
+    task: TaskRecord,
     scrapers: dict[str, BaseScraper],
     openai_client: AsyncOpenAI,
     settings: Settings,

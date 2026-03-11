@@ -9,12 +9,24 @@
 import argparse
 import asyncio
 import sys
+from typing import Any, cast
 
 from loguru import logger
 from supabase import create_client
 
 from src.config import load_settings
 from src.database import create_task_if_not_exists, run_in_thread
+
+
+def _as_rows(data: Any) -> list[dict[str, Any]]:
+    """Нормализовать result.data к списку dict-строк."""
+    rows: list[dict[str, Any]] = []
+    if not isinstance(data, list):
+        return rows
+    for item in data:
+        if isinstance(item, dict):
+            rows.append(cast(dict[str, Any], item))
+    return rows
 
 
 async def reanalyze(limit: int | None = None, dry_run: bool = False) -> None:
@@ -34,7 +46,7 @@ async def reanalyze(limit: int | None = None, dry_run: bool = False) -> None:
         query = query.limit(limit)
 
     result = await run_in_thread(query.execute)
-    blogs = result.data
+    blogs = _as_rows(result.data)
 
     if not blogs:
         logger.info("Нет блогеров для переанализа")
@@ -44,12 +56,13 @@ async def reanalyze(limit: int | None = None, dry_run: bool = False) -> None:
 
     if dry_run:
         for blog in blogs:
-            logger.info(f"  [dry-run] @{blog.get('username', '?')} ({blog['id']})")
+            blog_id = str(blog.get("id", ""))
+            logger.info(f"  [dry-run] @{blog.get('username', '?')} ({blog_id})")
         logger.info(f"[dry-run] Было бы сброшено {len(blogs)} блогеров. Выход.")
         return
 
     # Сброс AI-полей батчами по 50
-    blog_ids = [b["id"] for b in blogs]
+    blog_ids = [str(b.get("id", "")) for b in blogs if str(b.get("id", ""))]
     batch_size = 50
     for i in range(0, len(blog_ids), batch_size):
         batch = blog_ids[i:i + batch_size]
@@ -70,8 +83,11 @@ async def reanalyze(limit: int | None = None, dry_run: bool = False) -> None:
     # Создание задач ai_analysis
     created = 0
     for blog in blogs:
+        blog_id = blog.get("id")
+        if not isinstance(blog_id, str):
+            continue
         task_id = await create_task_if_not_exists(
-            db, blog["id"], "ai_analysis", priority=5,
+            db, blog_id, "ai_analysis", priority=5,
         )
         if task_id:
             created += 1

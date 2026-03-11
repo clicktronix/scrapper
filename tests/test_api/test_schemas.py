@@ -59,6 +59,41 @@ class TestScrapeRequest:
         assert req.usernames == ["blogger1", "blogger2"]
 
 
+class TestPreFilterRequest:
+    """Валидация запроса на pre_filter."""
+
+    def test_valid_usernames(self) -> None:
+        from src.api.schemas import PreFilterRequest
+
+        req = PreFilterRequest(usernames=["blogger1", "blogger2"])
+        assert req.usernames == ["blogger1", "blogger2"]
+
+    def test_cleans_and_deduplicates(self) -> None:
+        """Убирает @, приводит к lowercase, удаляет дубликаты."""
+        from src.api.schemas import PreFilterRequest
+
+        req = PreFilterRequest(usernames=["@Blogger1", "  blogger1  ", "BLOGGER2"])
+        assert req.usernames == ["blogger1", "blogger2"]
+
+    def test_empty_list_rejected(self) -> None:
+        import pytest
+        from pydantic import ValidationError
+
+        from src.api.schemas import PreFilterRequest
+
+        with pytest.raises(ValidationError):
+            PreFilterRequest(usernames=[])
+
+    def test_max_100_exceeded_rejected(self) -> None:
+        import pytest
+        from pydantic import ValidationError
+
+        from src.api.schemas import PreFilterRequest
+
+        with pytest.raises(ValidationError):
+            PreFilterRequest(usernames=[f"user{i}" for i in range(101)])
+
+
 class TestDiscoverRequest:
     """Валидация запроса на discover."""
 

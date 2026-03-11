@@ -103,6 +103,7 @@ Auth: `Authorization: Bearer <SCRAPER_API_KEY>`
 | `GET` | `/api/tasks` | Да | Список задач (фильтры: status, task_type, limit, offset) |
 | `GET` | `/api/tasks/{id}` | Да | Статус конкретной задачи |
 | `POST` | `/api/tasks/scrape` | Да | Создать full_scrape по списку username |
+| `POST` | `/api/tasks/pre_filter` | Да | Создать pre_filter по списку username |
 | `POST` | `/api/tasks/discover` | Да | Создать discover по хештегу |
 | `POST` | `/api/tasks/{id}/retry` | Да | Повторить упавшую задачу (только failed) |
 
@@ -117,6 +118,12 @@ curl -X POST http://localhost:8001/api/tasks/scrape \
   -H "Authorization: Bearer $SCRAPER_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"usernames": ["blogger1", "blogger2", "@blogger3"]}'
+
+# Добавить блогеров в pre-filter
+curl -X POST http://localhost:8001/api/tasks/pre_filter \
+  -H "Authorization: Bearer $SCRAPER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"usernames": ["blogger1", "blogger2"]}'
 
 # Discover по хештегу
 curl -X POST http://localhost:8001/api/tasks/discover \
@@ -179,6 +186,7 @@ src/
     ├── scrape_handler.py    # handle_full_scrape
     ├── ai_handler.py        # handle_ai_analysis, batch results
     ├── discover_handler.py  # handle_discover
+    ├── pre_filter_handler.py # handle_pre_filter
     └── scheduler.py         # APScheduler — cron-задачи
 ```
 
@@ -188,6 +196,7 @@ src/
 |-----|-----------|-----------|
 | `full_scrape` | 3-8 | Полный скрейп профиля: посты, рилсы, хайлайты, метрики, изображения |
 | `ai_analysis` | 3 | AI-анализ через OpenAI Batch API (батчами по 10+), категоризация, теги, embedding |
+| `pre_filter` | 8 | Предфильтрация профиля перед full_scrape: приватность, активность, лайки |
 | `discover` | 10 | Поиск новых блогеров по хештегу |
 
 ## Переменные окружения

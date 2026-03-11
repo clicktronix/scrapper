@@ -3,7 +3,7 @@ import asyncio
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 from supabase import Client
@@ -90,6 +90,13 @@ def _extract_rpc_scalar(data: Any) -> Any:
         return data
 
     return data
+
+
+def _as_dict_row(value: Any) -> dict[str, Any]:
+    """Нормализовать элемент ответа Supabase к dict."""
+    if isinstance(value, dict):
+        return cast(dict[str, Any], value)
+    return {}
 
 
 async def is_blog_fresh(db: Client, blog_id: str, min_days: int) -> bool:
@@ -184,8 +191,8 @@ async def create_task_if_not_exists(
         }).execute
     )
 
-    task_id = result.data
-    if task_id:
+    task_id = _extract_rpc_scalar(result.data)
+    if isinstance(task_id, str) and task_id:
         logger.info(f"Created task {task_type} for blog {blog_id}: {task_id}")
         return task_id
 
@@ -206,13 +213,20 @@ async def fetch_pending_tasks(db: Client, limit: int = 10) -> list[TaskRecord]:
         .limit(limit)
         .execute
     )
-    if result.data:
+    rows: list[TaskRecord] = []
+    raw_data = result.data or []
+    for raw in raw_data:
+        row = _as_dict_row(raw)
+        if row:
+            rows.append(cast(TaskRecord, row))
+
+    if rows:
         types = {}
-        for t in result.data:
+        for t in rows:
             tt = t.get("task_type", "?")
             types[tt] = types.get(tt, 0) + 1
-        logger.debug(f"fetch_pending_tasks: {len(result.data)} tasks ({types})")
-    return result.data
+        logger.debug(f"fetch_pending_tasks: {len(rows)} tasks ({types})")
+    return rows
 
 
 async def recover_stuck_tasks(
@@ -241,7 +255,7 @@ async def recover_stuck_tasks(
         db.table("scrape_tasks")
         .select("id, task_type, attempts, max_attempts")
         .eq("status", "running")
-        .in_("task_type", ["full_scrape", "discover"])
+        .in_("task_type", ["full_scrape", "discover", "pre_filter"])
         .lt("started_at", threshold)
         .execute
     )
@@ -256,26 +270,33 @@ async def recover_stuck_tasks(
         .execute
     )
 
-    all_tasks = (result.data or []) + (ai_result.data or [])
+    all_tasks = [_as_dict_row(t) for t in (result.data or []) + (ai_result.data or [])]
+    all_tasks = [t for t in all_tasks if t]
     if not all_tasks:
         return 0
 
     recovered = 0
     for task in all_tasks:
-        timeout = max_ai_running_minutes if task["task_type"] == "ai_analysis" else max_running_minutes
-        if task["attempts"] >= task["max_attempts"]:
+        task_type = str(task.get("task_type", ""))
+        task_id = str(task.get("id", ""))
+        if not task_id:
+            continue
+        attempts = int(task.get("attempts", 0) or 0)
+        max_attempts = int(task.get("max_attempts", 0) or 0)
+        timeout = max_ai_running_minutes if task_type == "ai_analysis" else max_running_minutes
+        if attempts >= max_attempts:
             await run_in_thread(
                 db.table("scrape_tasks").update({
                     "status": "failed",
                     "error_message": f"Stuck in running for >{timeout}min, max attempts exhausted",
-                }).eq("id", task["id"]).execute
+                }).eq("id", task_id).execute
             )
         else:
             await run_in_thread(
                 db.table("scrape_tasks").update({
                     "status": "pending",
                     "error_message": f"Recovered: stuck in running for >{timeout}min",
-                }).eq("id", task["id"]).execute
+                }).eq("id", task_id).execute
             )
             recovered += 1
 
