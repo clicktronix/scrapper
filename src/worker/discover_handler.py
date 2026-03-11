@@ -1,6 +1,6 @@
 """Обработчик задач дискавери новых профилей."""
 
-from typing import Any
+from typing import Any, cast
 
 from supabase import Client
 
@@ -9,6 +9,13 @@ from src.config import Settings
 from src.platforms.base import BaseScraper
 from src.platforms.instagram.exceptions import AllAccountsCooldownError
 from src.worker.scrape_handler import _normalize_username
+
+
+def _as_row_dict(value: Any) -> dict[str, Any]:
+    """Нормализовать JSON-строку ответа Supabase к dict."""
+    if isinstance(value, dict):
+        return cast(dict[str, Any], value)
+    return {}
 
 
 async def handle_discover(
@@ -60,9 +67,12 @@ async def handle_discover(
         .in_("username", normalized_usernames)
         .execute
     )
-    existing_blogs_by_username: dict[str, dict[str, Any]] = {
-        b["username"]: b for b in existing_blogs_result.data
-    }
+    existing_blogs_by_username: dict[str, dict[str, Any]] = {}
+    for raw in existing_blogs_result.data or []:
+        row = _as_row_dict(raw)
+        username_raw = row.get("username")
+        if isinstance(username_raw, str) and username_raw:
+            existing_blogs_by_username[username_raw] = row
 
     new_count = 0
     for profile in discovered:
@@ -72,7 +82,10 @@ async def handle_discover(
         existing_blog = existing_blogs_by_username.get(normalized_username)
         if existing_blog:
             # Для существующих блогов: проверить свежесть
-            blog_id = existing_blog["id"]
+            blog_id_raw = existing_blog.get("id")
+            if not isinstance(blog_id_raw, str):
+                continue
+            blog_id = blog_id_raw
             if not await _h.is_blog_fresh(db, blog_id, settings.rescrape_days):
                 try:
                     await _h.create_task_if_not_exists(db, blog_id, "full_scrape", priority=5)
@@ -90,7 +103,11 @@ async def handle_discover(
                 })
                 .execute
             )
-            person_id = person_result.data[0]["id"]
+            person_row = _as_row_dict(person_result.data[0]) if person_result.data else {}
+            person_id_raw = person_row.get("id")
+            if not isinstance(person_id_raw, str):
+                raise ValueError("Invalid persons insert response: missing id")
+            person_id = person_id_raw
 
             blog_insert_data: dict[str, Any] = {
                 "person_id": person_id,
@@ -112,7 +129,11 @@ async def handle_discover(
                 .insert(blog_insert_data)
                 .execute
             )
-            blog_id = blog_result.data[0]["id"]
+            blog_row = _as_row_dict(blog_result.data[0]) if blog_result.data else {}
+            blog_id_raw = blog_row.get("id")
+            if not isinstance(blog_id_raw, str):
+                raise ValueError("Invalid blogs insert response: missing id")
+            blog_id = blog_id_raw
 
             await _h.create_task_if_not_exists(db, blog_id, "full_scrape", priority=5)
             new_count += 1

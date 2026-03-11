@@ -99,6 +99,42 @@ class TestDownloadImage:
         assert result is None
 
 
+    @pytest.mark.asyncio
+    async def test_rejects_svg_mime_type(self) -> None:
+        """SVG не должен проходить проверку MIME."""
+        from src.image_storage import download_image
+
+        mock_response = MagicMock()
+        mock_response.content = b"<svg></svg>"
+        mock_response.headers = {"content-type": "image/svg+xml"}
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.get.return_value = mock_response
+
+        result = await download_image("https://cdn.instagram.com/photo.svg", mock_client)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_accepts_webp_mime_type(self) -> None:
+        """WebP должен проходить проверку MIME."""
+        from src.image_storage import download_image
+
+        mock_response = MagicMock()
+        mock_response.content = b"\x00webp" * 10
+        mock_response.headers = {"content-type": "image/webp"}
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.get.return_value = mock_response
+
+        result = await download_image("https://cdn.instagram.com/photo.webp", mock_client)
+        assert result is not None
+        data, content_type = result
+        assert data == mock_response.content
+        assert content_type == "image/webp"
+
+
 class TestUploadImage:
     """Тесты upload_image."""
 
@@ -302,7 +338,7 @@ class TestPersistProfileImages:
         ]
 
         with patch("src.image_storage.download_and_upload_image", new_callable=AsyncMock) as mock_fn:
-            avatar_url, post_urls = await persist_profile_images(
+            _avatar_url, post_urls = await persist_profile_images(
                 mock_db, "https://sb.co", "blog-1", None, posts,
             )
 

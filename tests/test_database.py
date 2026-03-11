@@ -374,6 +374,40 @@ class TestSanitizeError:
         sanitized = sanitize_error(error)
         assert "admin:secret" not in sanitized
 
+    def test_masks_bearer_token(self) -> None:
+        """Bearer токен маскируется."""
+        from src.database import sanitize_error
+        result = sanitize_error("Authorization: Bearer sk-abc123xyz")
+        assert "sk-abc123xyz" not in result
+        assert "Bearer ***" in result
+
+    def test_masks_query_token(self) -> None:
+        """Query parameter token маскируется."""
+        from src.database import sanitize_error
+        result = sanitize_error("https://api.host.com?token=secret123&other=ok")
+        assert "secret123" not in result
+
+    def test_masks_api_key_param(self) -> None:
+        """Query parameter api_key маскируется."""
+        from src.database import sanitize_error
+        result = sanitize_error("url?api_key=mysecret&foo=bar")
+        assert "mysecret" not in result
+
+    def test_preserves_normal_text(self) -> None:
+        """Обычный текст без креденшалов не изменяется."""
+        from src.database import sanitize_error
+        msg = "Connection refused to database"
+        assert sanitize_error(msg) == msg
+
+    def test_masks_multiple_patterns(self) -> None:
+        """Несколько паттернов маскируются одновременно."""
+        from src.database import sanitize_error
+        msg = "Bearer sk-123 and https://u:p@h.com?token=abc"
+        result = sanitize_error(msg)
+        assert "sk-123" not in result
+        assert "u:p" not in result
+        assert "abc" not in result
+
 
 class TestGetBackoffSeconds:
     """Тесты экспоненциального backoff."""

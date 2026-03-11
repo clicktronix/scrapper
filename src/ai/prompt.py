@@ -198,19 +198,8 @@ SYSTEM_PROMPT = (
 )
 
 
-def build_analysis_prompt(
-    profile: ScrapedProfile,
-    image_map: dict[str, str] | None = None,
-) -> list[dict[str, Any]]:
-    """
-    Собрать multimodal-запрос для OpenAI.
-    Возвращает list[message] для chat completions.
-
-    image_map — словарь {url: data_uri} для замены remote URL на base64.
-    Если None — используются оригинальные remote URL (обратная совместимость).
-    Если передан, но url нет в словаре — изображение пропускается.
-    """
-    # Текстовая часть
+def _build_profile_section(profile: ScrapedProfile) -> list[str]:
+    """Секция профиля: username, bio, метрики, бизнес-информация."""
     text_parts: list[str] = []
 
     text_parts.append(f"Username: @{profile.username}")
@@ -271,37 +260,52 @@ def build_analysis_prompt(
         hint_parts.append(f"{posts_with_comments} с комментариями")
     text_parts.append(f"Объём данных: {', '.join(hint_parts)}.")
 
-    # Хайлайты — заголовки, упоминания, ссылки, локации
-    if profile.highlights:
-        titles = [h.title for h in profile.highlights]
-        text_parts.append(f"\nHighlight titles: {titles}")
-        all_hl_mentions: set[str] = set()
-        all_hl_links: set[str] = set()
-        all_hl_locations: set[str] = set()
-        for h in profile.highlights:
-            all_hl_mentions.update(h.story_mentions)
-            all_hl_links.update(h.story_links)
-            all_hl_locations.update(h.story_locations)
-        if all_hl_mentions:
-            text_parts.append(f"Highlight mentions: {sorted(all_hl_mentions)}")
-        if all_hl_links:
-            text_parts.append(f"Highlight links: {sorted(all_hl_links)}")
-        if all_hl_locations:
-            text_parts.append(f"Highlight locations: {sorted(all_hl_locations)}")
-        all_hl_sponsors: set[str] = set()
-        all_hl_hashtags: set[str] = set()
-        any_paid_partnership = False
-        for h in profile.highlights:
-            all_hl_sponsors.update(h.story_sponsor_tags)
-            all_hl_hashtags.update(h.story_hashtags)
-            if h.has_paid_partnership:
-                any_paid_partnership = True
-        if all_hl_sponsors:
-            text_parts.append(f"Highlight sponsors: {sorted(all_hl_sponsors)}")
-        if all_hl_hashtags:
-            text_parts.append(f"Highlight hashtags: {sorted(all_hl_hashtags)}")
-        if any_paid_partnership:
-            text_parts.append("Has paid partnerships in highlights: True")
+    return text_parts
+
+
+def _build_highlights_section(profile: ScrapedProfile) -> list[str]:
+    """Секция хайлайтов: заголовки, упоминания, ссылки, локации."""
+    if not profile.highlights:
+        return []
+
+    text_parts: list[str] = []
+
+    titles = [h.title for h in profile.highlights]
+    text_parts.append(f"\nHighlight titles: {titles}")
+    all_hl_mentions: set[str] = set()
+    all_hl_links: set[str] = set()
+    all_hl_locations: set[str] = set()
+    for h in profile.highlights:
+        all_hl_mentions.update(h.story_mentions)
+        all_hl_links.update(h.story_links)
+        all_hl_locations.update(h.story_locations)
+    if all_hl_mentions:
+        text_parts.append(f"Highlight mentions: {sorted(all_hl_mentions)}")
+    if all_hl_links:
+        text_parts.append(f"Highlight links: {sorted(all_hl_links)}")
+    if all_hl_locations:
+        text_parts.append(f"Highlight locations: {sorted(all_hl_locations)}")
+    all_hl_sponsors: set[str] = set()
+    all_hl_hashtags: set[str] = set()
+    any_paid_partnership = False
+    for h in profile.highlights:
+        all_hl_sponsors.update(h.story_sponsor_tags)
+        all_hl_hashtags.update(h.story_hashtags)
+        if h.has_paid_partnership:
+            any_paid_partnership = True
+    if all_hl_sponsors:
+        text_parts.append(f"Highlight sponsors: {sorted(all_hl_sponsors)}")
+    if all_hl_hashtags:
+        text_parts.append(f"Highlight hashtags: {sorted(all_hl_hashtags)}")
+    if any_paid_partnership:
+        text_parts.append("Has paid partnerships in highlights: True")
+
+    return text_parts
+
+
+def _build_media_section(profile: ScrapedProfile) -> list[str]:
+    """Секция медиа: посты, рилсы, хештеги, упоминания, комментарии."""
+    text_parts: list[str] = []
 
     # Посты
     if profile.medias:
@@ -386,6 +390,27 @@ def build_analysis_prompt(
             all_locations.add(loc)
     if all_locations:
         text_parts.append(f"Post locations: {sorted(all_locations)}")
+
+    return text_parts
+
+
+def build_analysis_prompt(
+    profile: ScrapedProfile,
+    image_map: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Собрать multimodal-запрос для OpenAI.
+    Возвращает list[message] для chat completions.
+
+    image_map — словарь {url: data_uri} для замены remote URL на base64.
+    Если None — используются оригинальные remote URL (обратная совместимость).
+    Если передан, но url нет в словаре — изображение пропускается.
+    """
+    # Текстовая часть
+    text_parts: list[str] = []
+    text_parts.extend(_build_profile_section(profile))
+    text_parts.extend(_build_highlights_section(profile))
+    text_parts.extend(_build_media_section(profile))
 
     # Собираем multimodal content
     content: list[dict[str, Any]] = [

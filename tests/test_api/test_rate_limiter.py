@@ -1,4 +1,5 @@
 """Тесты RateLimiter — in-memory rate limiter."""
+import asyncio
 import time
 from unittest.mock import MagicMock
 
@@ -130,3 +131,25 @@ class TestRateLimiter:
         limiter = RateLimiter()
         assert limiter.max_requests == 60
         assert limiter.window_seconds == 60
+
+    @pytest.mark.asyncio
+    async def test_concurrent_requests_respect_limit(self) -> None:
+        """Конкурентные запросы не должны превышать лимит."""
+        limiter = RateLimiter(max_requests=5, window_seconds=60)
+        request = _make_request("10.0.0.1")
+        results = await asyncio.gather(
+            *[_safe_check(limiter, request) for _ in range(10)],
+        )
+        passed = sum(1 for r in results if r is True)
+        blocked = sum(1 for r in results if r is False)
+        assert passed == 5
+        assert blocked == 5
+
+
+async def _safe_check(limiter: RateLimiter, request: MagicMock) -> bool:
+    """Проверить rate limit, вернуть True если прошёл, False если заблокирован."""
+    try:
+        await limiter.check(request)
+        return True
+    except HTTPException:
+        return False

@@ -206,7 +206,7 @@ async def resolve_profile_images(
 
     # Собираем только успешные
     image_map: dict[str, str] = {}
-    for url, data_uri in zip(urls, processed):
+    for url, data_uri in zip(urls, processed, strict=True):
         if data_uri is not None:
             image_map[url] = data_uri
 

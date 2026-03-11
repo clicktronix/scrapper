@@ -307,7 +307,7 @@ class TestPollBatches:
             # Проверяем формат task_ids_by_blog с attempts/max_attempts
             for call in mock_handle.call_args_list:
                 task_ids_map = call.args[3]
-                for blog_id, task_info in task_ids_map.items():
+                for _blog_id, task_info in task_ids_map.items():
                     assert "id" in task_info
                     assert "attempts" in task_info
                     assert "max_attempts" in task_info

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.api.schemas import HealthResponse
-from src.api.services import find_blog_by_username, get_health_status
+from src.api.services import fetch_tasks_list, find_blog_by_username, get_health_status
 
 
 class TestFindBlogByUsername:
@@ -88,3 +88,50 @@ class TestGetHealthStatus:
         assert result.tasks_running == -1
         assert result.tasks_pending == -1
         assert response.status_code == 503
+
+
+class TestFetchTasksList:
+    """Тесты fetch_tasks_list."""
+
+    @pytest.mark.asyncio
+    async def test_returns_tasks_and_total(self) -> None:
+        """Успешное получение списка задач."""
+        db = MagicMock()
+        mock_data = [{"id": "t1", "status": "pending"}, {"id": "t2", "status": "running"}]
+
+        with patch("src.api.services.run_in_thread", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = MagicMock(data=mock_data, count=5)
+            result = await fetch_tasks_list(db, limit=2, offset=0)
+
+        assert result["tasks"] == mock_data
+        assert result["total"] == 5
+        assert result["limit"] == 2
+        assert result["offset"] == 0
+        assert "error" not in result
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_db_error(self) -> None:
+        """При ошибке БД возвращает пустой список и error."""
+        db = MagicMock()
+
+        with patch("src.api.services.run_in_thread", new_callable=AsyncMock, side_effect=Exception("DB down")):
+            result = await fetch_tasks_list(db)
+
+        assert result["tasks"] == []
+        assert result["total"] == 0
+        assert result["error"] == "DB down"
+
+    @pytest.mark.asyncio
+    async def test_applies_status_filter(self) -> None:
+        """Фильтр по status добавляет .eq()."""
+        db = MagicMock()
+        mock_query = MagicMock()
+        db.table.return_value.select.return_value = mock_query
+        mock_query.eq.return_value = mock_query
+        mock_query.order.return_value.range.return_value = mock_query
+
+        with patch("src.api.services.run_in_thread", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = MagicMock(data=[], count=0)
+            await fetch_tasks_list(db, status="pending")
+
+        mock_query.eq.assert_called_once_with("status", "pending")

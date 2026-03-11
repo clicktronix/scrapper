@@ -12,18 +12,20 @@ class TestScrapeRequest:
 
     def test_empty_usernames_rejected(self) -> None:
         import pytest
+        from pydantic import ValidationError
 
         from src.api.schemas import ScrapeRequest
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             ScrapeRequest(usernames=[])
 
     def test_over_100_usernames_rejected(self) -> None:
         import pytest
+        from pydantic import ValidationError
 
         from src.api.schemas import ScrapeRequest
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             ScrapeRequest(usernames=[f"user{i}" for i in range(101)])
 
     def test_exactly_100_accepted(self) -> None:
@@ -57,6 +59,41 @@ class TestScrapeRequest:
         assert req.usernames == ["blogger1", "blogger2"]
 
 
+class TestPreFilterRequest:
+    """Валидация запроса на pre_filter."""
+
+    def test_valid_usernames(self) -> None:
+        from src.api.schemas import PreFilterRequest
+
+        req = PreFilterRequest(usernames=["blogger1", "blogger2"])
+        assert req.usernames == ["blogger1", "blogger2"]
+
+    def test_cleans_and_deduplicates(self) -> None:
+        """Убирает @, приводит к lowercase, удаляет дубликаты."""
+        from src.api.schemas import PreFilterRequest
+
+        req = PreFilterRequest(usernames=["@Blogger1", "  blogger1  ", "BLOGGER2"])
+        assert req.usernames == ["blogger1", "blogger2"]
+
+    def test_empty_list_rejected(self) -> None:
+        import pytest
+        from pydantic import ValidationError
+
+        from src.api.schemas import PreFilterRequest
+
+        with pytest.raises(ValidationError):
+            PreFilterRequest(usernames=[])
+
+    def test_max_100_exceeded_rejected(self) -> None:
+        import pytest
+        from pydantic import ValidationError
+
+        from src.api.schemas import PreFilterRequest
+
+        with pytest.raises(ValidationError):
+            PreFilterRequest(usernames=[f"user{i}" for i in range(101)])
+
+
 class TestDiscoverRequest:
     """Валидация запроса на discover."""
 
@@ -81,26 +118,29 @@ class TestDiscoverRequest:
 
     def test_empty_hashtag_rejected(self) -> None:
         import pytest
+        from pydantic import ValidationError
 
         from src.api.schemas import DiscoverRequest
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             DiscoverRequest(hashtag="")
 
     def test_only_hash_rejected(self) -> None:
         import pytest
+        from pydantic import ValidationError
 
         from src.api.schemas import DiscoverRequest
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             DiscoverRequest(hashtag="#")
 
     def test_whitespace_only_rejected(self) -> None:
         import pytest
+        from pydantic import ValidationError
 
         from src.api.schemas import DiscoverRequest
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             DiscoverRequest(hashtag="   ")
 
 

@@ -1,6 +1,6 @@
 """APScheduler cron-задачи для скрапера."""
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import openai
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -29,6 +29,17 @@ from src.image_storage import delete_blog_images
 from src.worker.handlers import handle_batch_results
 
 
+def _as_rows(data: Any) -> list[dict[str, Any]]:
+    """Нормализовать result.data к списку dict-строк."""
+    rows: list[dict[str, Any]] = []
+    if not isinstance(data, list):
+        return rows
+    for item in data:
+        if isinstance(item, dict):
+            rows.append(cast(dict[str, Any], item))
+    return rows
+
+
 async def schedule_updates(db: Client, settings: Settings) -> None:
     """Создать задачи re-scrape для блогов, где scraped_at > rescrape_days дней."""
     threshold = (datetime.now(UTC) - timedelta(days=settings.rescrape_days)).isoformat()
@@ -44,9 +55,12 @@ async def schedule_updates(db: Client, settings: Settings) -> None:
     )
 
     created = 0
-    for blog in result.data:
+    for blog in _as_rows(result.data):
+        blog_id = blog.get("id")
+        if not isinstance(blog_id, str):
+            continue
         task_id = await create_task_if_not_exists(
-            db, blog["id"], "full_scrape", priority=8
+            db, blog_id, "full_scrape", priority=8
         )
         if task_id:
             created += 1
@@ -75,17 +89,21 @@ async def poll_batches(db: Client, openai_client: AsyncOpenAI) -> None:
     # или при коллизиях blog_id:
     # {blog_id: [ {"id": ...}, {"id": ...} ]}
     batches: dict[str, dict[str, Any]] = {}
-    for task in result.data:
-        batch_id = (task.get("payload") or {}).get("batch_id")
-        if batch_id:
+    for task in _as_rows(result.data):
+        payload = task.get("payload")
+        payload_dict = payload if isinstance(payload, dict) else {}
+        batch_id = payload_dict.get("batch_id")
+        if isinstance(batch_id, str) and batch_id:
             if batch_id not in batches:
                 batches[batch_id] = {}
             task_info = {
-                "id": task["id"],
-                "attempts": task.get("attempts", 1),
-                "max_attempts": task.get("max_attempts", 3),
+                "id": str(task.get("id", "")),
+                "attempts": int(task.get("attempts", 1) or 1),
+                "max_attempts": int(task.get("max_attempts", 3) or 3),
             }
-            blog_id = task["blog_id"]
+            blog_id = str(task.get("blog_id", ""))
+            if not blog_id:
+                continue
             existing = batches[batch_id].get(blog_id)
             if existing is None:
                 batches[batch_id][blog_id] = task_info
@@ -121,9 +139,15 @@ async def retry_stale_batches(db: Client, openai_client: AsyncOpenAI, settings: 
     if not result.data:
         return
 
-    for task in result.data:
+    for task in _as_rows(result.data):
+        task_id = task.get("id")
+        if not isinstance(task_id, str):
+            continue
         await mark_task_failed(
-            db, task["id"], task["attempts"], task["max_attempts"],
+            db,
+            task_id,
+            int(task.get("attempts", 1) or 1),
+            int(task.get("max_attempts", 3) or 3),
             "Batch not completed in 4h", retry=True,
         )
 
@@ -148,8 +172,11 @@ async def cleanup_old_images(db: Client, settings: Settings) -> None:
         return
 
     total_deleted = 0
-    for blog in result.data:
-        deleted = await delete_blog_images(db, blog["id"])
+    for blog in _as_rows(result.data):
+        blog_id = blog.get("id")
+        if not isinstance(blog_id, str):
+            continue
+        deleted = await delete_blog_images(db, blog_id)
         total_deleted += deleted
 
     logger.info(f"[cleanup_images] Удалено {total_deleted} изображений из {len(result.data)} блогов")
@@ -172,24 +199,27 @@ async def retry_missing_embeddings(
         return
 
     regenerated = 0
-    for blog in result.data:
+    for blog in _as_rows(result.data):
+        blog_id = blog.get("id")
+        if not isinstance(blog_id, str):
+            continue
         try:
-            insights = AIInsights.model_validate(blog["ai_insights"])
+            insights = AIInsights.model_validate(blog.get("ai_insights"))
             text = build_embedding_text(insights)
             if text is None:
-                logger.warning(f"[retry_embedding] Blog {blog['id']}: пустой текст для embedding, пропускаем")
+                logger.warning(f"[retry_embedding] Blog {blog_id}: пустой текст для embedding, пропускаем")
                 continue
             vector = await generate_embedding(openai_client, text)
             if vector:
                 await run_in_thread(
-                    db.table("blogs").update({"embedding": vector}).eq("id", blog["id"]).execute
+                    db.table("blogs").update({"embedding": vector}).eq("id", blog_id).execute
                 )
                 regenerated += 1
         except openai.RateLimitError:
             logger.warning("[retry_embedding] Rate limited, stopping batch")
             break
         except Exception as e:
-            logger.error(f"[retry_embedding] Blog {blog['id']}: {e}")
+            logger.error(f"[retry_embedding] Blog {blog_id}: {e}")
 
     if regenerated:
         logger.info(f"[retry_embedding] Перегенерировано {regenerated} embedding'ов")
@@ -209,23 +239,31 @@ async def retry_taxonomy_mappings(db: Client) -> None:
         return
 
     # Исключаем блоги, у которых уже есть записи в blog_categories
-    blog_ids = [b["id"] for b in result.data]
+    rows = _as_rows(result.data)
+    blog_ids = [str(b.get("id", "")) for b in rows if str(b.get("id", ""))]
     existing_cats = await run_in_thread(
         db.table("blog_categories").select("blog_id").in_("blog_id", blog_ids).execute
     )
-    already_matched = {r["blog_id"] for r in existing_cats.data}
+    already_matched = {
+        str(r.get("blog_id", ""))
+        for r in _as_rows(existing_cats.data)
+        if str(r.get("blog_id", ""))
+    }
 
     categories_cache = await load_categories(db)
     tags_cache = await load_tags(db)
 
     processed = 0
     errors = 0
-    for blog in result.data:
-        if blog["id"] in already_matched:
+    for blog in rows:
+        blog_id_raw = blog.get("id")
+        if not isinstance(blog_id_raw, str):
             continue
-        blog_id = blog["id"]
+        if blog_id_raw in already_matched:
+            continue
+        blog_id = blog_id_raw
         try:
-            insights = AIInsights.model_validate(blog["ai_insights"])
+            insights = AIInsights.model_validate(blog.get("ai_insights"))
             await match_categories(db, blog_id, insights, categories=categories_cache)
             await match_tags(db, blog_id, insights, tags=tags_cache)
             processed += 1

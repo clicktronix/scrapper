@@ -17,6 +17,7 @@ dependencies = [
     "hikerapi>=1.7",
     "pillow>=12.1.1",
     "python-dotenv>=1.0",
+    "rapidfuzz>=3.14.3",
 ]
 
 [project.optional-dependencies]
@@ -44,8 +45,22 @@ target-version = "py313"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP"]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "ASYNC"]
+ignore = [
+    "B008",    # function-call-in-default-argument (FastAPI Depends)
+    "SIM108",  # use-ternary-operator (часто менее читабельно)
+    "RUF001",  # ambiguous-unicode-character-string (кириллица в строках — ожидаемо)
+    "RUF002",  # ambiguous-unicode-character-docstring (кириллица в docstrings — ожидаемо)
+    "RUF003",  # ambiguous-unicode-character-comment (кириллица в комментариях — ожидаемо)
+    "RUF012",  # mutable-class-default (Pydantic models)
+]
 
 [tool.pyright]
 pythonVersion = "3.13"
 typeCheckingMode = "standard"
+
+[dependency-groups]
+dev = [
+    "openpyxl>=3.1.5",
+    "pandas>=3.0.1",
+]

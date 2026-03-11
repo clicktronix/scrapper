@@ -42,6 +42,7 @@ class TestTaskHandlersRegistry:
         assert _resolve_handler("full_scrape") is not None
         assert _resolve_handler("ai_analysis") is not None
         assert _resolve_handler("discover") is not None
+        assert _resolve_handler("pre_filter") is not None
 
     def test_resolve_handler_unknown_returns_none(self) -> None:
         from src.worker.loop import _resolve_handler
@@ -62,6 +63,17 @@ class TestTaskHandlersRegistry:
         from src.worker.loop import TASK_DEPS
 
         assert "scraper" in TASK_DEPS["discover"]
+
+    def test_pre_filter_requires_scraper(self) -> None:
+        from src.worker.loop import TASK_DEPS
+
+        assert "scraper" in TASK_DEPS["pre_filter"]
+
+    def test_resolve_handler_pre_filter(self) -> None:
+        from src.worker.loop import _resolve_handler
+
+        handler = _resolve_handler("pre_filter")
+        assert handler is not None
 
 
 class TestProcessTask:
@@ -281,7 +293,7 @@ class TestRunWorker:
                 await asyncio.sleep(0.1)
                 shutdown_event.set()
 
-            asyncio.create_task(stop_soon())
+            stop_task = asyncio.create_task(stop_soon())  # noqa: F841, RUF006
 
             await run_worker(mock_db, {}, settings, shutdown_event, mock_openai)
 
@@ -459,7 +471,7 @@ class TestRunWorker:
             shutdown_event.set()
             return []
 
-        async def fast_wait(tasks, timeout=None):
+        async def fast_wait(tasks, timeout=None):  # noqa: ASYNC109
             """Имитация asyncio.wait с мгновенным таймаутом — все задачи pending."""
             # Не ждём — сразу возвращаем все как pending
             return set(), set(tasks)

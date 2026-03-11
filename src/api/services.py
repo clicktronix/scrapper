@@ -1,6 +1,6 @@
 """Бизнес-логика API скрапера — вынесена из route handlers."""
 import time
-from typing import Any
+from typing import Any, cast
 
 from fastapi import Response
 from loguru import logger
@@ -10,6 +10,7 @@ from supabase import Client
 
 from src.api.schemas import HealthResponse
 from src.database import cleanup_orphan_person, run_in_thread
+from src.models.db_types import TaskListResultWithError
 from src.platforms.instagram.client import AccountPool
 
 
@@ -23,7 +24,10 @@ async def find_blog_by_username(db: Client, username: str) -> str | None:
         .execute
     )
     if blog_result.data:
-        return blog_result.data[0]["id"]
+        first_row = cast(dict[str, Any], blog_result.data[0]) if isinstance(blog_result.data[0], dict) else {}
+        blog_id = first_row.get("id")
+        if isinstance(blog_id, str):
+            return blog_id
     return None
 
 
@@ -42,7 +46,11 @@ async def find_or_create_blog(db: Client, username: str) -> str:
         .insert({"full_name": normalized_username})
         .execute
     )
-    person_id = person_result.data[0]["id"]
+    first_person = cast(dict[str, Any], person_result.data[0]) if person_result.data and isinstance(person_result.data[0], dict) else {}
+    person_id_value = first_person.get("id")
+    if not isinstance(person_id_value, str):
+        raise ValueError("Invalid persons insert response: missing id")
+    person_id = person_id_value
 
     try:
         blog_result = await run_in_thread(
@@ -55,7 +63,11 @@ async def find_or_create_blog(db: Client, username: str) -> str:
             })
             .execute
         )
-        return blog_result.data[0]["id"]
+        first_blog = cast(dict[str, Any], blog_result.data[0]) if blog_result.data and isinstance(blog_result.data[0], dict) else {}
+        blog_id = first_blog.get("id")
+        if not isinstance(blog_id, str):
+            raise ValueError("Invalid blogs insert response: missing id")
+        return blog_id
     except PostgrestAPIError:
         # Race condition: параллельный запрос уже создал блог (unique constraint) — ищем повторно
         retry_id = await find_blog_by_username(db, normalized_username)
@@ -126,18 +138,32 @@ async def fetch_tasks_list(
     task_type: str | None = None,
     limit: int = 20,
     offset: int = 0,
-) -> dict[str, Any]:
+) -> TaskListResultWithError:
     """Получить список задач с фильтрами и пагинацией."""
-    query = db.table("scrape_tasks").select("*", count=CountMethod.exact)
-    if status:
-        query = query.eq("status", status)
-    if task_type:
-        query = query.eq("task_type", task_type)
-    query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
-    result = await run_in_thread(query.execute)
-    return {
-        "tasks": result.data,
-        "total": result.count or 0,
-        "limit": limit,
-        "offset": offset,
-    }
+    try:
+        query = db.table("scrape_tasks").select("*", count=CountMethod.exact)
+        if status:
+            query = query.eq("status", status)
+        if task_type:
+            query = query.eq("task_type", task_type)
+        query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
+        result = await run_in_thread(query.execute)
+        rows: list[dict[str, Any]] = []
+        for raw in result.data or []:
+            if isinstance(raw, dict):
+                rows.append(cast(dict[str, Any], raw))
+        return {
+            "tasks": rows,
+            "total": result.count or 0,
+            "limit": limit,
+            "offset": offset,
+        }
+    except Exception as e:
+        logger.error(f"[tasks_list] Ошибка получения задач: {e}")
+        return {
+            "tasks": [],
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+            "error": str(e),
+        }

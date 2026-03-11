@@ -27,6 +27,7 @@ Single-process сервис (FastAPI + polling worker + APScheduler), котор
 │  │  FastAPI :8001    │  │   Polling Loop    │  │    APScheduler      │  │
 │  │                  │  │                  │  │                     │  │
 │  │  POST /scrape    │  │  Каждые 30с:     │  │  poll_batches  15м  │  │
+│  │  POST /pre_filter│  │  fetch_pending   │  │  recover_tasks 10м  │  │
 │  │  POST /discover  │  │  fetch_pending   │  │  recover_tasks 10м  │  │
 │  │  POST /retry     │  │  tasks (limit 10)│  │  retry_stale   2ч   │  │
 │  │  GET  /tasks     │  │                  │  │  schedule   daily   │  │
@@ -39,6 +40,7 @@ Single-process сервис (FastAPI + polling worker + APScheduler), котор
 │                        │                                            │  │
 │                        │  ┌───────────┐ ┌────────────┐ ┌─────────┐ │  │
 │                        │  │full_scrape│ │ai_analysis │ │discover │ │  │
+│                        │  │pre_filter │ │            │ │         │ │  │
 │                        │  └─────┬─────┘ └─────┬──────┘ └────┬────┘ │  │
 │                        └────────│─────────────│─────────────│──────┘  │
 │                                 │             │             │         │
@@ -93,6 +95,7 @@ src/
     ├── scrape_handler.py    ← handle_full_scrape
     ├── ai_handler.py        ← handle_ai_analysis, batch results
     ├── discover_handler.py  ← handle_discover
+    ├── pre_filter_handler.py ← handle_pre_filter
     └── scheduler.py         ← APScheduler — cron-задачи
 ```
 
@@ -162,6 +165,7 @@ SaaS-бэкенд через `SafeHikerClient` — наследник `hikerapi.
 | 3 | `full_scrape` | API `/api/tasks/scrape` (ручное создание) |
 | 3 | `ai_analysis` | Автоматически после full_scrape |
 | 5 | `full_scrape` | Discover (новые блогеры из хештегов) |
+| 8 | `pre_filter` | API `/api/tasks/pre_filter` (массовый импорт и предфильтрация) |
 | 8 | `full_scrape` | Scheduler `schedule_updates` (ежедневно 3:00 UTC) |
 | 10 | `discover` | API `/api/tasks/discover` |
 
@@ -267,6 +271,7 @@ AIInsights (from OpenAI)
 | `GET` | `/api/tasks` | Да | Список задач (фильтры: status, task_type, limit, offset) |
 | `GET` | `/api/tasks/{id}` | Да | Статус конкретной задачи |
 | `POST` | `/api/tasks/scrape` | Да | Создать full_scrape по списку username |
+| `POST` | `/api/tasks/pre_filter` | Да | Создать pre_filter по списку username |
 | `POST` | `/api/tasks/discover` | Да | Создать discover по хештегу |
 | `POST` | `/api/tasks/{id}/retry` | Да | Повторить упавшую задачу (только status=failed) |
 
@@ -357,6 +362,30 @@ scraper.discover(hashtag, min_followers)
   ├── INSERT blogs(username, platform_id, ...)
   ├── is_blog_fresh() → пропуск если < 60 дней
   └── create_task('full_scrape', priority=5)
+```
+
+### Pre-filter
+
+```
+pre_filter task (payload: {username: "..."})
+        │
+        ▼
+user_by_username_v2(username)
+  ├── private → task done, filtered_out: private
+  ├── not found → task done, filtered_out: not_found
+  └── active profile
+        │
+        ▼
+user_medias_chunk_v1 + user_clips_chunk_v1
+  ├── no content or last content > N days → filtered_out: inactive
+  ├── avg likes of last N media < threshold → filtered_out: low_engagement
+  └── passed
+        │
+        ▼
+INSERT persons + INSERT blogs(scrape_status='pending')
+        │
+        ▼
+mark_task_done()
 ```
 
 ---

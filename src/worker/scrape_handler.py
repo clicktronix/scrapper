@@ -1,7 +1,7 @@
 """Обработчик задач скрапинга профилей."""
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from instagrapi.exceptions import UserNotFound
 from loguru import logger
@@ -9,7 +9,7 @@ from supabase import Client
 
 import src.worker.handlers as _h
 from src.config import Settings
-from src.models.blog import ScrapedComment
+from src.models.blog import ScrapedComment, ScrapedProfile
 from src.platforms.base import BaseScraper
 from src.platforms.instagram.exceptions import (
     AllAccountsCooldownError,
@@ -19,9 +19,59 @@ from src.platforms.instagram.exceptions import (
 )
 
 
+def _as_row_dict(value: Any) -> dict[str, Any]:
+    """Нормализовать JSON-строку ответа Supabase к dict."""
+    if isinstance(value, dict):
+        return cast(dict[str, Any], value)
+    return {}
+
+
 def _normalize_username(username: str) -> str:
     """Normalize Instagram username for stable deduplication."""
     return username.strip().lstrip("@").lower()
+
+
+def _build_blog_data(
+    profile: ScrapedProfile,
+    avg_reels_views: int | None,
+) -> dict[str, Any]:
+    """Собрать словарь blog_data из скрапленного профиля для upsert в БД."""
+    blog_data: dict[str, Any] = {
+        "platform_id": profile.platform_id,
+        "full_name": profile.full_name,
+        "bio": profile.biography,
+        "followers_count": profile.follower_count,
+        "following_count": profile.following_count,
+        "media_count": profile.media_count,
+        "is_verified": profile.is_verified,
+        "is_business": profile.is_business,
+        "engagement_rate": profile.avg_er,
+        "er_reels": profile.avg_er_reels,
+        "er_trend": profile.er_trend,
+        "posts_per_week": profile.posts_per_week,
+        "avg_reels_views": avg_reels_views,
+        "scrape_status": "analyzing",
+        "scraped_at": datetime.now(UTC).isoformat(),
+        "bio_links": [bl.model_dump() for bl in profile.bio_links],
+    }
+    # Опциональные поля — добавляем только если заданы
+    if profile.business_category:
+        blog_data["business_category"] = profile.business_category
+    if profile.account_type is not None:
+        blog_data["account_type"] = profile.account_type
+    if profile.public_email:
+        blog_data["public_email"] = profile.public_email
+    if profile.contact_phone_number:
+        blog_data["contact_phone_number"] = profile.contact_phone_number
+    if profile.public_phone_country_code:
+        blog_data["public_phone_country_code"] = profile.public_phone_country_code
+    if profile.city_name:
+        blog_data["city_name"] = profile.city_name
+    if profile.address_street:
+        blog_data["address_street"] = profile.address_street
+    if profile.external_url:
+        blog_data["external_url"] = profile.external_url
+    return blog_data
 
 
 def _parse_top_comments(raw_value: Any) -> list[ScrapedComment]:
@@ -82,9 +132,17 @@ async def handle_full_scrape(
                                   "Blog not found", retry=False)
         return
 
-    username = blog_result.data[0]["username"]
-    person_id = blog_result.data[0].get("person_id")
-    scrape_status = blog_result.data[0].get("scrape_status")
+    blog_row = _as_row_dict(blog_result.data[0])
+    username_value = blog_row.get("username")
+    if not isinstance(username_value, str) or not username_value:
+        await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
+                                  "Blog username is missing", retry=False)
+        return
+    username = username_value
+    person_id_raw = blog_row.get("person_id")
+    person_id = person_id_raw if isinstance(person_id_raw, str) else None
+    scrape_status_raw = blog_row.get("scrape_status")
+    scrape_status = scrape_status_raw if isinstance(scrape_status_raw, str) else None
 
     # Блог деактивирован/удалён — не скрапить
     if scrape_status in ("deleted", "deactivated"):
@@ -171,41 +229,8 @@ async def handle_full_scrape(
                  f"{len(profile.medias)} publications, "
                  f"{len(profile.highlights)} highlights, "
                  f"followers={profile.follower_count}")
-    blog_data: dict[str, Any] = {
-        "platform_id": profile.platform_id,
-        "full_name": profile.full_name,
-        "bio": profile.biography,
-        "followers_count": profile.follower_count,
-        "following_count": profile.following_count,
-        "media_count": profile.media_count,
-        "is_verified": profile.is_verified,
-        "is_business": profile.is_business,
-        "engagement_rate": profile.avg_er,
-        "er_reels": profile.avg_er_reels,
-        "er_trend": profile.er_trend,
-        "posts_per_week": profile.posts_per_week,
-        "avg_reels_views": avg_reels_views,
-        "scrape_status": "analyzing",
-        "scraped_at": datetime.now(UTC).isoformat(),
-        "bio_links": [bl.model_dump() for bl in profile.bio_links],
-    }
+    blog_data = _build_blog_data(profile, avg_reels_views)
     # avatar_url записываем только после успешной загрузки в Storage (ниже)
-    if profile.business_category:
-        blog_data["business_category"] = profile.business_category
-    if profile.account_type is not None:
-        blog_data["account_type"] = profile.account_type
-    if profile.public_email:
-        blog_data["public_email"] = profile.public_email
-    if profile.contact_phone_number:
-        blog_data["contact_phone_number"] = profile.contact_phone_number
-    if profile.public_phone_country_code:
-        blog_data["public_phone_country_code"] = profile.public_phone_country_code
-    if profile.city_name:
-        blog_data["city_name"] = profile.city_name
-    if profile.address_street:
-        blog_data["address_street"] = profile.address_street
-    if profile.external_url:
-        blog_data["external_url"] = profile.external_url
 
     # Upsert посты и хайлайты (mode="json" для корректной сериализации datetime)
     posts_data = [p.model_dump(mode="json") for p in profile.medias]

@@ -1,6 +1,6 @@
 """FastAPI-приложение скрапера."""
 import hmac
-from typing import Literal
+from typing import Any, Literal, cast
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response
@@ -14,18 +14,27 @@ from src.api.schemas import (
     DiscoverRequest,
     DiscoverResponse,
     HealthResponse,
+    PreFilterRequest,
+    PreFilterResponse,
     RetryResponse,
     ScrapeRequest,
     ScrapeResponse,
     TaskListResponse,
     TaskResponse,
 )
-from src.api.services import fetch_tasks_list, find_or_create_blog, get_health_status
+from src.api.services import fetch_tasks_list, find_blog_by_username, find_or_create_blog, get_health_status
 from src.config import Settings
 from src.database import create_task_if_not_exists, is_blog_fresh, run_in_thread
 from src.platforms.instagram.client import AccountPool
 
 security = HTTPBearer(auto_error=False)
+
+
+def _as_row_dict(value: Any) -> dict[str, Any]:
+    """Преобразовать JSON-строку ответа Supabase в dict."""
+    if isinstance(value, dict):
+        return cast(dict[str, Any], value)
+    return {}
 
 
 def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> FastAPI:
@@ -75,26 +84,26 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
     )
     async def list_tasks(
         status: Literal["pending", "running", "done", "failed"] | None = Query(default=None),
-        task_type: Literal["full_scrape", "ai_analysis", "discover"] | None = Query(default=None),
+        task_type: Literal["full_scrape", "ai_analysis", "discover", "pre_filter"] | None = Query(default=None),
         limit: int = Query(default=20, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Список задач с фильтрами и пагинацией."""
-        return await fetch_tasks_list(db, status, task_type, limit, offset)
+        return dict(await fetch_tasks_list(db, status, task_type, limit, offset))
 
     @app.get(
         "/api/tasks/{task_id}",
         response_model=TaskResponse,
         dependencies=[Depends(check_rate_limit), Depends(verify_api_key)],
     )
-    async def get_task(task_id: UUID = Path(description="UUID задачи")) -> dict:
+    async def get_task(task_id: UUID = Path(description="UUID задачи")) -> dict[str, Any]:
         """Получить задачу по ID."""
         result = await run_in_thread(
             db.table("scrape_tasks").select("*").eq("id", str(task_id)).execute
         )
         if not result.data:
             raise HTTPException(status_code=404, detail="Task not found")
-        return result.data[0]
+        return _as_row_dict(result.data[0])
 
     @app.post(
         "/api/tasks/scrape",
@@ -118,7 +127,9 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
                     .eq("id", blog_id).execute,
                     retry_transient=True,
                 )
-                blog_status = blog_row.data[0]["scrape_status"] if blog_row.data else None
+                blog_status = None
+                if blog_row.data:
+                    blog_status = _as_row_dict(blog_row.data[0]).get("scrape_status")
                 if blog_status in ("deleted", "deactivated"):
                     results.append({
                         "task_id": None, "username": username,
@@ -155,6 +166,60 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
         return {"created": created, "skipped": skipped, "errors": errors, "tasks": results}
 
     @app.post(
+        "/api/tasks/pre_filter",
+        response_model=PreFilterResponse,
+        dependencies=[Depends(check_rate_limit), Depends(verify_api_key)],
+    )
+    async def pre_filter(body: PreFilterRequest, response: Response) -> dict:
+        """Создать pre_filter задачи для проверки блогеров."""
+        results = []
+        created = 0
+        skipped = 0
+        errors = 0
+
+        for username in body.usernames:
+            try:
+                # Если блогер уже в БД — пропускаем
+                existing_blog_id = await find_blog_by_username(db, username)
+                if existing_blog_id is not None:
+                    results.append({
+                        "task_id": None, "username": username,
+                        "blog_id": existing_blog_id, "status": "skipped",
+                        "reason": "blog already exists",
+                    })
+                    skipped += 1
+                    continue
+
+                # Создать задачу (blog_id=None, username в payload)
+                task_id = await create_task_if_not_exists(
+                    db, None, "pre_filter", priority=8,
+                    payload={"username": username},
+                )
+
+                if task_id:
+                    results.append({
+                        "task_id": task_id, "username": username,
+                        "blog_id": None, "status": "created",
+                    })
+                    created += 1
+                else:
+                    results.append({
+                        "task_id": None, "username": username,
+                        "blog_id": None, "status": "skipped",
+                    })
+                    skipped += 1
+            except Exception as exc:
+                logger.error(f"Ошибка при обработке pre_filter {username}: {exc}")
+                results.append({
+                    "task_id": None, "username": username,
+                    "blog_id": None, "status": "error",
+                })
+                errors += 1
+
+        response.status_code = 207 if errors > 0 else 201
+        return {"created": created, "skipped": skipped, "errors": errors, "tasks": results}
+
+    @app.post(
         "/api/tasks/discover", status_code=201,
         response_model=DiscoverResponse, dependencies=[Depends(check_rate_limit), Depends(verify_api_key)],
     )
@@ -171,7 +236,7 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
         response_model=RetryResponse,
         dependencies=[Depends(check_rate_limit), Depends(verify_api_key)],
     )
-    async def retry_task(task_id: UUID = Path(description="UUID задачи")) -> dict:
+    async def retry_task(task_id: UUID = Path(description="UUID задачи")) -> dict[str, str]:
         """Повторить упавшую задачу — сбросить в pending."""
         tid = str(task_id)
         result = await run_in_thread(
@@ -180,7 +245,7 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
         if not result.data:
             raise HTTPException(status_code=404, detail="Task not found")
 
-        task = result.data[0]
+        task = _as_row_dict(result.data[0])
         if task["status"] != "failed":
             raise HTTPException(status_code=409, detail=f"Task status is '{task['status']}', expected 'failed'")
 

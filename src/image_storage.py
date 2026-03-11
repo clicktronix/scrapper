@@ -12,6 +12,12 @@ IMAGES_BUCKET = "blog-images"
 DOWNLOAD_TIMEOUT = 15.0
 MAX_DOWNLOAD_SIZE = 10 * 1024 * 1024  # 10 МБ
 MAX_CONCURRENT_UPLOADS = 2  # Ограничение параллельных загрузок в Storage
+_ALLOWED_IMAGE_MIMES = frozenset({
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+})
 
 
 def build_public_url(supabase_url: str, path: str) -> str:
@@ -57,8 +63,8 @@ async def download_image(url: str, client: httpx.AsyncClient) -> tuple[bytes, st
 
     content_type = response.headers.get("content-type", "image/jpeg")
     mime = content_type.split(";")[0].strip()
-    if not mime.startswith("image/"):
-        logger.warning(f"[image_storage] Не изображение ({mime}): {url}")
+    if mime not in _ALLOWED_IMAGE_MIMES:
+        logger.warning(f"[image_storage] Неподдерживаемый MIME-тип ({mime}): {url}")
         return None
 
     return response.content, mime
@@ -166,7 +172,7 @@ async def persist_profile_images(
     avatar_url: str | None = None
     post_urls: dict[str, str] = {}
 
-    for (kind, platform_id), result in zip(task_keys, results):
+    for (kind, platform_id), result in zip(task_keys, results, strict=True):
         if isinstance(result, BaseException):
             logger.error(f"[image_storage] Ошибка при обработке {kind} {platform_id}: {result}")
             continue

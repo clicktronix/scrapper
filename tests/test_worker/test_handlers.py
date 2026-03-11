@@ -2093,7 +2093,7 @@ class TestLoadProfilesBioLinksCompat:
 
         with patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run:
             mock_run.side_effect = [blogs_result, empty_data, empty_data]
-            profiles, task_ids, failed = await _load_profiles_for_batch(db, pending_tasks)
+            profiles, _task_ids, _failed = await _load_profiles_for_batch(db, pending_tasks)
 
         assert len(profiles) == 1
         _, profile = profiles[0]
@@ -2118,7 +2118,7 @@ class TestLoadProfilesBioLinksCompat:
 
         with patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run:
             mock_run.side_effect = [blogs_result, empty_data, empty_data]
-            profiles, task_ids, failed = await _load_profiles_for_batch(db, pending_tasks)
+            profiles, _task_ids, _failed = await _load_profiles_for_batch(db, pending_tasks)
 
         _, profile = profiles[0]
         assert profile.bio_links[0].title == "TG"
@@ -2140,7 +2140,7 @@ class TestLoadProfilesBioLinksCompat:
 
         with patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run:
             mock_run.side_effect = [blogs_result, empty_data, empty_data]
-            profiles, task_ids, failed = await _load_profiles_for_batch(db, pending_tasks)
+            profiles, _task_ids, _failed = await _load_profiles_for_batch(db, pending_tasks)
 
         _, profile = profiles[0]
         assert profile.bio_links == []

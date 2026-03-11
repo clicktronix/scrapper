@@ -1,24 +1,41 @@
 """Матчинг категорий, тегов и городов с таксономией из БД."""
+import asyncio
 import re
-from difflib import get_close_matches
 
 from loguru import logger
+from rapidfuzz import fuzz
 from supabase import Client
 
 from src.ai.schemas import AIInsights
 from src.database import run_in_thread
 
 __all__ = [
-    "normalize_lookup_key",
-    "normalize_brand",
+    "invalidate_taxonomy_cache",
     "is_valid_city",
     "load_categories",
-    "load_tags",
     "load_cities",
+    "load_tags",
     "match_categories",
-    "match_tags",
     "match_city",
+    "match_tags",
+    "normalize_brand",
+    "normalize_lookup_key",
 ]
+
+# In-memory кэш для справочников (сбрасывается при рестарте или вручную)
+_categories_cache: dict[str, str] | None = None
+_tags_cache: dict[str, str] | None = None
+_cities_cache: dict[str, str] | None = None
+_cache_lock = asyncio.Lock()
+
+
+def invalidate_taxonomy_cache() -> None:
+    """Сбросить кэш справочников. Вызывать при обновлении таксономии."""
+    global _categories_cache, _tags_cache, _cities_cache
+    _categories_cache = None
+    _tags_cache = None
+    _cities_cache = None
+
 
 _TAG_ALIASES: dict[str, str] = {
     # Русские варианты / сокращения (EN→RU перевод — в _EN_TO_RU_TAGS)
@@ -49,8 +66,8 @@ def normalize_lookup_key(key: str) -> str:
     return " ".join(normalized.split())
 
 
-def _fuzzy_lookup(key: str, cache: dict[str, str], cutoff: float = 0.8) -> str | None:
-    """Поиск в кэше: exact → normalized variants → fuzzy."""
+def _fuzzy_lookup(key: str, cache: dict[str, str], cutoff: float = 80.0) -> str | None:
+    """Поиск в кэше: exact → normalized variants → fuzzy (rapidfuzz)."""
     # 1. Exact
     if key in cache:
         return cache[key]
@@ -68,39 +85,55 @@ def _fuzzy_lookup(key: str, cache: dict[str, str], cutoff: float = 0.8) -> str |
         if variant in cache:
             return cache[variant]
 
-    # 3. Fuzzy (difflib)
-    matches = get_close_matches(normalized, cache.keys(), n=1, cutoff=cutoff)
-    if matches:
-        return cache[matches[0]]
+    # 3. Fuzzy (rapidfuzz) — быстрее difflib в 10-100x
+    best_score = 0.0
+    best_key: str | None = None
+    for cached_key in cache:
+        score = fuzz.ratio(normalized, cached_key)
+        if score > best_score:
+            best_score = score
+            best_key = cached_key
+    if best_key is not None and best_score >= cutoff:
+        return cache[best_key]
     return None
 
 
 async def load_categories(db: Client) -> dict[str, str]:
-    """Загрузить все категории из БД.
+    """Загрузить все категории из БД (с in-memory кэшем).
 
     Возвращает {key: category_id} где:
     - key = code (для верхнеуровневых, AI возвращает код в primary_categories)
     - key = name_lower (для всех, подкатегории матчатся по имени)
     """
-    cat_result = await run_in_thread(
-        db.table("categories").select("id, code, name, parent_id").execute
-    )
-    categories: dict[str, str] = {}
-    for c in cat_result.data:
-        if not isinstance(c, dict):
-            continue
-        cat_id = c.get("id")
-        if not isinstance(cat_id, str):
-            continue
-        # Верхнеуровневые категории — индексируем по code
-        code = c.get("code")
-        if isinstance(code, str) and code:
-            categories[normalize_lookup_key(code)] = cat_id
-        # Все категории — индексируем по name_lower
-        name = c.get("name")
-        if isinstance(name, str):
-            categories[normalize_lookup_key(name)] = cat_id
-    return categories
+    global _categories_cache
+    if _categories_cache is not None:
+        return _categories_cache
+
+    async with _cache_lock:
+        # Double-check после захвата лока
+        if _categories_cache is not None:
+            return _categories_cache
+
+        cat_result = await run_in_thread(
+            db.table("categories").select("id, code, name, parent_id").execute
+        )
+        categories: dict[str, str] = {}
+        for c in cat_result.data:
+            if not isinstance(c, dict):
+                continue
+            cat_id = c.get("id")
+            if not isinstance(cat_id, str):
+                continue
+            # Верхнеуровневые категории — индексируем по code
+            code = c.get("code")
+            if isinstance(code, str) and code:
+                categories[normalize_lookup_key(code)] = cat_id
+            # Все категории — индексируем по name_lower
+            name = c.get("name")
+            if isinstance(name, str):
+                categories[normalize_lookup_key(name)] = cat_id
+        _categories_cache = categories
+        return categories
 
 
 async def match_categories(
@@ -265,9 +298,7 @@ def is_valid_city(city_name: str) -> bool:
         return False
     if _CITY_GARBAGE_PATTERN.search(city_name):
         return False
-    if city_name.strip().lower() in _COUNTRY_NAMES:
-        return False
-    return True
+    return city_name.strip().lower() not in _COUNTRY_NAMES
 
 
 _CITY_ALIASES: dict[str, str] = {
@@ -303,34 +334,44 @@ def normalize_brand(name: str) -> str:
 
 
 async def load_cities(db: Client) -> dict[str, str]:
-    """Загрузить города из БД.
+    """Загрузить города из БД (с in-memory кэшем).
 
     Возвращает {normalized_name: city_id} с индексацией по:
     - name (английское, например 'almaty')
     - l10n.ru (русское, например 'алматы')
     - l10n.kk (казахское)
     """
-    result = await run_in_thread(
-        db.table("cities").select("id, name, l10n").execute
-    )
-    cities: dict[str, str] = {}
-    for c in result.data:
-        if not isinstance(c, dict):
-            continue
-        city_id = c.get("id")
-        if not isinstance(city_id, str):
-            continue
-        # Английское название
-        name = c.get("name")
-        if isinstance(name, str):
-            cities[normalize_lookup_key(name)] = city_id
-        # Локализованные названия (ru, kk, en)
-        l10n = c.get("l10n")
-        if isinstance(l10n, dict):
-            for lang_name in l10n.values():
-                if isinstance(lang_name, str) and lang_name:
-                    cities[normalize_lookup_key(lang_name)] = city_id
-    return cities
+    global _cities_cache
+    if _cities_cache is not None:
+        return _cities_cache
+
+    async with _cache_lock:
+        # Double-check после захвата лока
+        if _cities_cache is not None:
+            return _cities_cache
+
+        result = await run_in_thread(
+            db.table("cities").select("id, name, l10n").execute
+        )
+        cities: dict[str, str] = {}
+        for c in result.data:
+            if not isinstance(c, dict):
+                continue
+            city_id = c.get("id")
+            if not isinstance(city_id, str):
+                continue
+            # Английское название
+            name = c.get("name")
+            if isinstance(name, str):
+                cities[normalize_lookup_key(name)] = city_id
+            # Локализованные названия (ru, kk, en)
+            l10n = c.get("l10n")
+            if isinstance(l10n, dict):
+                for lang_name in l10n.values():
+                    if isinstance(lang_name, str) and lang_name:
+                        cities[normalize_lookup_key(lang_name)] = city_id
+        _cities_cache = cities
+        return cities
 
 
 async def match_city(
@@ -361,19 +402,29 @@ async def match_city(
 
 
 async def load_tags(db: Client) -> dict[str, str]:
-    """Загрузить активные теги из БД. Возвращает {name_lower: tag_id}."""
-    result = await run_in_thread(
-        db.table("tags").select("id, name").eq("status", "active").execute
-    )
-    tags: dict[str, str] = {}
-    for t in result.data:
-        if not isinstance(t, dict):
-            continue
-        name = t.get("name")
-        tag_id = t.get("id")
-        if isinstance(name, str) and isinstance(tag_id, str):
-            tags[normalize_lookup_key(name)] = tag_id
-    return tags
+    """Загрузить активные теги из БД (с in-memory кэшем). Возвращает {name_lower: tag_id}."""
+    global _tags_cache
+    if _tags_cache is not None:
+        return _tags_cache
+
+    async with _cache_lock:
+        # Double-check после захвата лока
+        if _tags_cache is not None:
+            return _tags_cache
+
+        result = await run_in_thread(
+            db.table("tags").select("id, name").eq("status", "active").execute
+        )
+        tags: dict[str, str] = {}
+        for t in result.data:
+            if not isinstance(t, dict):
+                continue
+            name = t.get("name")
+            tag_id = t.get("id")
+            if isinstance(name, str) and isinstance(tag_id, str):
+                tags[normalize_lookup_key(name)] = tag_id
+        _tags_cache = tags
+        return tags
 
 
 async def match_tags(

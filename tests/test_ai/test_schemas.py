@@ -341,7 +341,7 @@ class TestAIInsights:
         from src.ai.schemas import AIInsights
 
         schema = AIInsights.model_json_schema()
-        first_prop = list(schema["properties"].keys())[0]
+        first_prop = next(iter(schema["properties"].keys()))
         assert first_prop == "reasoning"
 
     def test_confidence_literal_values(self) -> None:
@@ -385,9 +385,11 @@ class TestPrimaryCategories:
 
     def test_primary_categories_rejects_more_than_3(self) -> None:
         """primary_categories > 3 элементов → ValidationError."""
+        from pydantic import ValidationError
+
         from src.ai.schemas import AIInsights
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             AIInsights(content={"primary_categories": ["a", "b", "c", "d"]})
 
     def test_primary_categories_rejects_unknown_code(self) -> None:
