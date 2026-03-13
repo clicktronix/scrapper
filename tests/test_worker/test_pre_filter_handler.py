@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from instagrapi.exceptions import UserNotFound
 
-from src.platforms.instagram.exceptions import InsufficientBalanceError
+from src.platforms.instagram.exceptions import HikerAPIError, InsufficientBalanceError
 from tests.conftest import make_db_mock, make_settings, make_task
 
 
@@ -365,3 +365,74 @@ class TestHandlePreFilter:
             mock_failed.assert_called_once()
             call_kwargs = mock_failed.call_args
             assert call_kwargs[1].get("retry") is False or call_kwargs[0][-1] is False
+
+    @pytest.mark.asyncio
+    async def test_hiker_api_404_logged_as_not_found(self) -> None:
+        """HikerAPIError 404 при user_by_username → done + pre_filter_log: not_found."""
+        from src.worker.pre_filter_handler import handle_pre_filter
+
+        task = make_task("pre_filter", blog_id=None, payload={"username": "deleted_user"})
+        db = make_db_mock()
+        settings = make_settings(
+            pre_filter_min_likes=30,
+            pre_filter_max_inactive_days=180,
+            pre_filter_posts_to_check=5,
+        )
+
+        with (
+            patch("src.worker.pre_filter_handler.asyncio.to_thread",
+                  new_callable=AsyncMock, side_effect=HikerAPIError(404, "Target user not found")),
+            patch("src.worker.pre_filter_handler._h.mark_task_running", new_callable=AsyncMock, return_value=True),
+            patch("src.worker.pre_filter_handler._h.run_in_thread", new_callable=AsyncMock) as mock_run,
+        ):
+            await handle_pre_filter(db, task, MagicMock(), settings)
+
+            # 2 вызова run_in_thread: update задачи + insert в pre_filter_log
+            assert mock_run.call_count == 2
+            update_data = db.table.return_value.update.call_args_list[0][0][0]
+            assert update_data["status"] == "done"
+            assert update_data["error_message"] == "filtered_out: not_found"
+            # Проверяем запись в pre_filter_log
+            insert_calls = db.table.return_value.insert.call_args_list
+            assert len(insert_calls) == 1
+            log_data = insert_calls[0][0][0]
+            assert log_data["username"] == "deleted_user"
+            assert log_data["reason"] == "not_found"
+
+    @pytest.mark.asyncio
+    async def test_hiker_api_404_on_medias_logged_as_not_found(self) -> None:
+        """HikerAPIError 404 при запросе постов → done + pre_filter_log: not_found."""
+        from src.worker.pre_filter_handler import handle_pre_filter
+
+        task = make_task("pre_filter", blog_id=None, payload={"username": "empty_acct"})
+        db = make_db_mock()
+        settings = make_settings(
+            pre_filter_min_likes=30,
+            pre_filter_max_inactive_days=180,
+            pre_filter_posts_to_check=5,
+        )
+
+        call_count = 0
+
+        async def mock_to_thread(func, *args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _make_user_info(follower_count=5000)
+            raise HikerAPIError(404, "Entries not found")
+
+        with (
+            patch("src.worker.pre_filter_handler.asyncio.to_thread", side_effect=mock_to_thread),
+            patch("src.worker.pre_filter_handler._h.mark_task_running", new_callable=AsyncMock, return_value=True),
+            patch("src.worker.pre_filter_handler._h.run_in_thread", new_callable=AsyncMock) as mock_run,
+        ):
+            await handle_pre_filter(db, task, MagicMock(), settings)
+
+            assert mock_run.call_count == 2
+            update_data = db.table.return_value.update.call_args_list[0][0][0]
+            assert update_data["status"] == "done"
+            assert update_data["error_message"] == "filtered_out: not_found"
+            log_data = db.table.return_value.insert.call_args_list[0][0][0]
+            assert log_data["reason"] == "not_found"
+            assert log_data["platform_id"] == "12345"
+            assert log_data["followers_count"] == 5000

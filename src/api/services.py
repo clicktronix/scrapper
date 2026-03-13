@@ -1,4 +1,5 @@
 """Бизнес-логика API скрапера — вынесена из route handlers."""
+import asyncio
 import time
 from typing import Any, cast
 
@@ -46,7 +47,10 @@ async def find_or_create_blog(db: Client, username: str) -> str:
         .insert({"full_name": normalized_username})
         .execute
     )
-    first_person = cast(dict[str, Any], person_result.data[0]) if person_result.data and isinstance(person_result.data[0], dict) else {}
+    first_person = (
+        cast(dict[str, Any], person_result.data[0])
+        if person_result.data and isinstance(person_result.data[0], dict) else {}
+    )
     person_id_value = first_person.get("id")
     if not isinstance(person_id_value, str):
         raise ValueError("Invalid persons insert response: missing id")
@@ -63,7 +67,10 @@ async def find_or_create_blog(db: Client, username: str) -> str:
             })
             .execute
         )
-        first_blog = cast(dict[str, Any], blog_result.data[0]) if blog_result.data and isinstance(blog_result.data[0], dict) else {}
+        first_blog = (
+            cast(dict[str, Any], blog_result.data[0])
+            if blog_result.data and isinstance(blog_result.data[0], dict) else {}
+        )
         blog_id = first_blog.get("id")
         if not isinstance(blog_id, str):
             raise ValueError("Invalid blogs insert response: missing id")
@@ -98,19 +105,21 @@ async def get_health_status(
         accounts_total = 0
         accounts_available = 0
 
-    # Подсчёт задач из БД
+    # Подсчёт задач из БД — параллельно
     try:
-        running = await run_in_thread(
-            db.table("scrape_tasks")
-            .select("id", count=CountMethod.exact)
-            .eq("status", "running")
-            .execute
-        )
-        pending = await run_in_thread(
-            db.table("scrape_tasks")
-            .select("id", count=CountMethod.exact)
-            .eq("status", "pending")
-            .execute
+        running, pending = await asyncio.gather(
+            run_in_thread(
+                db.table("scrape_tasks")
+                .select("id", count=CountMethod.exact)
+                .eq("status", "running")
+                .execute
+            ),
+            run_in_thread(
+                db.table("scrape_tasks")
+                .select("id", count=CountMethod.exact)
+                .eq("status", "pending")
+                .execute
+            ),
         )
         tasks_running = running.count or 0
         tasks_pending = pending.count or 0

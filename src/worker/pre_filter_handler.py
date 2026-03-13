@@ -145,6 +145,11 @@ async def handle_pre_filter(
                                   "HikerAPI: insufficient balance", retry=False)
         return
     except HikerAPIError as e:
+        # 404 = аккаунт не существует — логируем как not_found, не тратим retry
+        if e.status_code == 404:
+            logger.info(f"[pre_filter] @{username}: не найден (HikerAPI 404)")
+            await _mark_filtered_out(db, task_id, "not_found", username=username)
+            return
         retry = e.status_code in (429, 500, 502, 503, 504)
         await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
                                   _h.sanitize_error(str(e)), retry=retry)
@@ -180,6 +185,14 @@ async def handle_pre_filter(
                                   "HikerAPI: insufficient balance", retry=False)
         return
     except HikerAPIError as e:
+        # 404 при запросе постов = "Entries not found" — аккаунт пустой/удалён
+        if e.status_code == 404:
+            logger.info(f"[pre_filter] @{username}: посты не найдены (HikerAPI 404)")
+            await _mark_filtered_out(
+                db, task_id, "not_found", username=username,
+                platform_id=user_id, followers_count=user.get("follower_count"),
+            )
+            return
         retry = e.status_code in (429, 500, 502, 503, 504)
         await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
                                   _h.sanitize_error(str(e)), retry=retry)

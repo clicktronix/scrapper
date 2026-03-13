@@ -250,24 +250,24 @@ async def recover_stuck_tasks(
         datetime.now(UTC) - timedelta(minutes=max_ai_running_minutes)
     ).isoformat()
 
-    # full_scrape / discover — короткий таймаут
-    result = await run_in_thread(
-        db.table("scrape_tasks")
-        .select("id, task_type, attempts, max_attempts")
-        .eq("status", "running")
-        .in_("task_type", ["full_scrape", "discover", "pre_filter"])
-        .lt("started_at", threshold)
-        .execute
-    )
-
-    # ai_analysis — длинный таймаут (батчи обрабатываются 1-2ч)
-    ai_result = await run_in_thread(
-        db.table("scrape_tasks")
-        .select("id, task_type, attempts, max_attempts")
-        .eq("status", "running")
-        .eq("task_type", "ai_analysis")
-        .lt("started_at", ai_threshold)
-        .execute
+    # Параллельно: короткий таймаут для scrape/discover/pre_filter, длинный для ai
+    result, ai_result = await asyncio.gather(
+        run_in_thread(
+            db.table("scrape_tasks")
+            .select("id, task_type, attempts, max_attempts")
+            .eq("status", "running")
+            .in_("task_type", ["full_scrape", "discover", "pre_filter"])
+            .lt("started_at", threshold)
+            .execute
+        ),
+        run_in_thread(
+            db.table("scrape_tasks")
+            .select("id, task_type, attempts, max_attempts")
+            .eq("status", "running")
+            .eq("task_type", "ai_analysis")
+            .lt("started_at", ai_threshold)
+            .execute
+        ),
     )
 
     all_tasks = [_as_dict_row(t) for t in (result.data or []) + (ai_result.data or [])]
@@ -275,12 +275,12 @@ async def recover_stuck_tasks(
     if not all_tasks:
         return 0
 
-    recovered = 0
-    for task in all_tasks:
+    # Параллельно обновляем все зависшие задачи
+    async def _recover_one(task: dict[str, Any]) -> bool:
         task_type = str(task.get("task_type", ""))
         task_id = str(task.get("id", ""))
         if not task_id:
-            continue
+            return False
         attempts = int(task.get("attempts", 0) or 0)
         max_attempts = int(task.get("max_attempts", 0) or 0)
         timeout = max_ai_running_minutes if task_type == "ai_analysis" else max_running_minutes
@@ -291,14 +291,17 @@ async def recover_stuck_tasks(
                     "error_message": f"Stuck in running for >{timeout}min, max attempts exhausted",
                 }).eq("id", task_id).execute
             )
-        else:
-            await run_in_thread(
-                db.table("scrape_tasks").update({
-                    "status": "pending",
-                    "error_message": f"Recovered: stuck in running for >{timeout}min",
-                }).eq("id", task_id).execute
-            )
-            recovered += 1
+            return False
+        await run_in_thread(
+            db.table("scrape_tasks").update({
+                "status": "pending",
+                "error_message": f"Recovered: stuck in running for >{timeout}min",
+            }).eq("id", task_id).execute
+        )
+        return True
+
+    results = await asyncio.gather(*[_recover_one(t) for t in all_tasks])
+    recovered = sum(1 for r in results if r)
 
     if recovered:
         logger.warning(f"Recovered {recovered} stuck tasks")

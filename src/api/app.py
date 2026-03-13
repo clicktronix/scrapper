@@ -1,4 +1,5 @@
 """FastAPI-приложение скрапера."""
+import asyncio
 import hmac
 from typing import Any, Literal, cast
 from uuid import UUID
@@ -112,16 +113,12 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
     )
     async def scrape(body: ScrapeRequest, response: Response) -> dict:
         """Создать full_scrape задачи по списку username."""
-        results = []
-        created = 0
-        skipped = 0
-        errors = 0
 
-        for username in body.usernames:
+        async def _process_one(username: str) -> dict[str, Any]:
+            """Обработать одного блогера для full_scrape."""
             try:
                 blog_id = await find_or_create_blog(db, username)
 
-                # Не создавать задачу для deleted/deactivated блогов
                 blog_row = await run_in_thread(
                     db.table("blogs").select("scrape_status")
                     .eq("id", blog_id).execute,
@@ -131,39 +128,34 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
                 if blog_row.data:
                     blog_status = _as_row_dict(blog_row.data[0]).get("scrape_status")
                 if blog_status in ("deleted", "deactivated"):
-                    results.append({
+                    return {
                         "task_id": None, "username": username,
                         "blog_id": blog_id, "status": "skipped",
                         "reason": f"blog is {blog_status}",
-                    })
-                    skipped += 1
-                    continue
+                    }
 
-                # Проверка свежести — не создавать задачу для недавно скрапленных
                 if await is_blog_fresh(db, blog_id, settings.rescrape_days):
-                    results.append({"task_id": None, "username": username, "blog_id": blog_id, "status": "skipped"})
-                    skipped += 1
-                    continue
+                    return {"task_id": None, "username": username, "blog_id": blog_id, "status": "skipped"}
 
-                # Создать задачу
                 task_id = await create_task_if_not_exists(
                     db, blog_id, "full_scrape", priority=3,
                 )
 
                 if task_id:
-                    results.append({"task_id": task_id, "username": username, "blog_id": blog_id, "status": "created"})
-                    created += 1
-                else:
-                    results.append({"task_id": None, "username": username, "blog_id": blog_id, "status": "skipped"})
-                    skipped += 1
+                    return {"task_id": task_id, "username": username, "blog_id": blog_id, "status": "created"}
+                return {"task_id": None, "username": username, "blog_id": blog_id, "status": "skipped"}
             except Exception as exc:
                 logger.error(f"Ошибка при обработке {username}: {exc}")
-                results.append({"task_id": None, "username": username, "blog_id": None, "status": "error"})
-                errors += 1
+                return {"task_id": None, "username": username, "blog_id": None, "status": "error"}
 
-        # 207 Multi-Status при частичных ошибках, 201 при полном успехе
+        all_results = await asyncio.gather(*[_process_one(u) for u in body.usernames])
+
+        created = sum(1 for r in all_results if r["status"] == "created")
+        skipped = sum(1 for r in all_results if r["status"] == "skipped")
+        errors = sum(1 for r in all_results if r["status"] == "error")
+
         response.status_code = 207 if errors > 0 else 201
-        return {"created": created, "skipped": skipped, "errors": errors, "tasks": results}
+        return {"created": created, "skipped": skipped, "errors": errors, "tasks": list(all_results)}
 
     @app.post(
         "/api/tasks/pre_filter",
@@ -172,49 +164,62 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
     )
     async def pre_filter(body: PreFilterRequest, response: Response) -> dict:
         """Создать pre_filter задачи для проверки блогеров."""
-        results = []
-        created = 0
+        # 1. Параллельно проверяем существование всех блогеров в БД
+        check_tasks = [find_blog_by_username(db, u) for u in body.usernames]
+        existing_ids = await asyncio.gather(*check_tasks, return_exceptions=True)
+
+        # 2. Собираем юзернеймов для создания задач
+        to_create: list[str] = []
+        results: list[dict[str, Any]] = []
         skipped = 0
         errors = 0
 
-        for username in body.usernames:
-            try:
-                # Если блогер уже в БД — пропускаем
-                existing_blog_id = await find_blog_by_username(db, username)
-                if existing_blog_id is not None:
-                    results.append({
-                        "task_id": None, "username": username,
-                        "blog_id": existing_blog_id, "status": "skipped",
-                        "reason": "blog already exists",
-                    })
-                    skipped += 1
-                    continue
-
-                # Создать задачу (blog_id=None, username в payload)
-                task_id = await create_task_if_not_exists(
-                    db, None, "pre_filter", priority=8,
-                    payload={"username": username},
-                )
-
-                if task_id:
-                    results.append({
-                        "task_id": task_id, "username": username,
-                        "blog_id": None, "status": "created",
-                    })
-                    created += 1
-                else:
-                    results.append({
-                        "task_id": None, "username": username,
-                        "blog_id": None, "status": "skipped",
-                    })
-                    skipped += 1
-            except Exception as exc:
-                logger.error(f"Ошибка при обработке pre_filter {username}: {exc}")
+        for username, existing in zip(body.usernames, existing_ids, strict=True):
+            if isinstance(existing, Exception):
+                logger.error(f"Ошибка при проверке pre_filter {username}: {existing}")
                 results.append({
                     "task_id": None, "username": username,
                     "blog_id": None, "status": "error",
                 })
                 errors += 1
+            elif existing is not None:
+                results.append({
+                    "task_id": None, "username": username,
+                    "blog_id": existing, "status": "skipped",
+                    "reason": "blog already exists",
+                })
+                skipped += 1
+            else:
+                to_create.append(username)
+
+        # 3. Параллельно создаём задачи для новых блогеров
+        create_tasks = [
+            create_task_if_not_exists(db, None, "pre_filter", priority=8, payload={"username": u})
+            for u in to_create
+        ]
+        create_results = await asyncio.gather(*create_tasks, return_exceptions=True)
+
+        created = 0
+        for username, result in zip(to_create, create_results, strict=True):
+            if isinstance(result, Exception):
+                logger.error(f"Ошибка при создании pre_filter {username}: {result}")
+                results.append({
+                    "task_id": None, "username": username,
+                    "blog_id": None, "status": "error",
+                })
+                errors += 1
+            elif result:
+                results.append({
+                    "task_id": result, "username": username,
+                    "blog_id": None, "status": "created",
+                })
+                created += 1
+            else:
+                results.append({
+                    "task_id": None, "username": username,
+                    "blog_id": None, "status": "skipped",
+                })
+                skipped += 1
 
         response.status_code = 207 if errors > 0 else 201
         return {"created": created, "skipped": skipped, "errors": errors, "tasks": results}
