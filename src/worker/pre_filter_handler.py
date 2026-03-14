@@ -285,12 +285,20 @@ async def handle_pre_filter(
 
     # Критерий 3: низкая вовлечённость (среднее кол-во лайков по всем медиа)
     # Instagram позволяет скрывать лайки — HikerAPI возвращает like_count=3 (фиктивное).
-    # Проверяем флаг like_and_view_counts_disabled.
+    # Проверяем флаг like_and_view_counts_disabled + ER-эвристику.
     likes_hidden = any(m.get("like_and_view_counts_disabled") for m in all_medias)
 
     posts_to_check = all_medias[: settings.pre_filter_posts_to_check]
     total_likes = sum(p.get("like_count", 0) or 0 for p in posts_to_check)
     avg_likes = total_likes / len(posts_to_check) if posts_to_check else 0
+
+    # HikerAPI не всегда выставляет like_and_view_counts_disabled.
+    # Для крупных аккаунтов (50K+) ER < 0.1% физически невозможен — лайки скрыты.
+    # Для мелких (<50K) низкий ER может быть реальным (магазины, бренды с купленными подписчиками).
+    followers = user.get("follower_count") or 0
+    if not likes_hidden and followers >= 50_000 and avg_likes / followers < 0.001:
+        likes_hidden = True
+        logger.info(f"[pre_filter] @{username}: ER={avg_likes / followers:.5f} < 0.001, считаем лайки скрытыми")
 
     logger.debug(
         f"[pre_filter] @{username}: avg_likes={avg_likes:.0f} "
@@ -298,7 +306,6 @@ async def handle_pre_filter(
     )
 
     if avg_likes < settings.pre_filter_min_likes and not likes_hidden:
-        followers = user.get("follower_count") or 0
         logger.info(f"[pre_filter] @{username}: avg likes {avg_likes:.0f} < {settings.pre_filter_min_likes}")
         await _mark_filtered_out(
             db,

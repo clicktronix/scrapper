@@ -503,9 +503,14 @@ class TestHikerCommentsFetching:
         ]
         self._setup_basic_profile(mock_client, medias)
 
+        # media_comments_chunk_v1 возвращает [comments_list, max_id, can_support_threading]
         mock_client.media_comments_chunk_v1.return_value = [
-            {"text": "Отличный пост!", "user": {"username": "fan1"}},
-            {"text": "Круто!", "user": {"username": "fan2"}},
+            [
+                {"text": "Отличный пост!", "user": {"username": "fan1"}},
+                {"text": "Круто!", "user": {"username": "fan2"}},
+            ],
+            None,
+            None,
         ]
 
         profile = await scraper.scrape_profile("testuser")
@@ -559,7 +564,7 @@ class TestHikerCommentsFetching:
         # Первый вызов падает, второй OK
         mock_client.media_comments_chunk_v1.side_effect = [
             Exception("API error"),
-            [{"text": "Ок", "user": {"username": "fan1"}}],
+            [[{"text": "Ок", "user": {"username": "fan1"}}], None, None],
         ]
 
         profile = await scraper.scrape_profile("testuser")
@@ -579,7 +584,9 @@ class TestHikerCommentsFetching:
         self._setup_basic_profile(mock_client, medias)
 
         mock_client.media_comments_chunk_v1.return_value = [
-            {"text": "Коммент", "user": {"username": "fan"}},
+            [{"text": "Коммент", "user": {"username": "fan"}}],
+            None,
+            None,
         ]
 
         await scraper.scrape_profile("testuser")
@@ -596,16 +603,63 @@ class TestHikerCommentsFetching:
         self._setup_basic_profile(mock_client, medias)
 
         mock_client.media_comments_chunk_v1.return_value = [
-            {"text": "", "user": {"username": "fan1"}},           # пустой текст
-            {"text": "Норм", "user": {}},                         # нет username
-            {"text": "  ", "user": {"username": "fan2"}},         # пробелы
-            {"text": "Ок!", "user": {"username": "fan3"}},        # валидный
+            [
+                {"text": "", "user": {"username": "fan1"}},           # пустой текст
+                {"text": "Норм", "user": {}},                         # нет username
+                {"text": "  ", "user": {"username": "fan2"}},         # пробелы
+                {"text": "Ок!", "user": {"username": "fan3"}},        # валидный
+            ],
+            None,
+            None,
         ]
 
         profile = await scraper.scrape_profile("testuser")
 
         assert len(profile.medias[0].top_comments) == 1
         assert profile.medias[0].top_comments[0].username == "fan3"
+
+    async def test_comments_chunked_response_format(
+        self, scraper: HikerInstagramScraper, mock_client: MagicMock
+    ) -> None:
+        """media_comments_chunk_v1 возвращает [comments, max_id, can_support] — извлекаем [0]."""
+        medias = [
+            _mock_hiker_media("1", comments=10, taken_at=1706400000),
+        ]
+        self._setup_basic_profile(mock_client, medias)
+
+        mock_client.media_comments_chunk_v1.return_value = [
+            [
+                {"text": "Первый!", "user": {"username": "fan1"}},
+                {"text": "Второй!", "user": {"username": "fan2"}},
+            ],
+            "next_cursor_abc",
+            True,
+        ]
+
+        profile = await scraper.scrape_profile("testuser")
+
+        assert len(profile.medias[0].top_comments) == 2
+        assert profile.medias[0].top_comments[0].username == "fan1"
+        assert profile.medias[0].top_comments[1].username == "fan2"
+
+    async def test_comments_flat_list_fallback(
+        self, scraper: HikerInstagramScraper, mock_client: MagicMock
+    ) -> None:
+        """Если API вернёт плоский список dict'ов — обрабатываем как fallback."""
+        medias = [
+            _mock_hiker_media("1", comments=10, taken_at=1706400000),
+        ]
+        self._setup_basic_profile(mock_client, medias)
+
+        # Плоский список (старый формат / неожиданный ответ)
+        mock_client.media_comments_chunk_v1.return_value = [
+            {"text": "Коммент!", "user": {"username": "fan1"}},
+        ]
+
+        profile = await scraper.scrape_profile("testuser")
+
+        assert len(profile.medias[0].top_comments) == 1
+        assert profile.medias[0].top_comments[0].username == "fan1"
 
     async def test_comments_none_response(
         self, scraper: HikerInstagramScraper, mock_client: MagicMock

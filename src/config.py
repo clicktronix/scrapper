@@ -100,13 +100,15 @@ class Settings(BaseSettings):
     # AI Batch
     batch_min_size: int = 10
     batch_model: str = "gpt-5-mini"
+    batch_reasoning_effort: str = "low"
 
     # AI
     embedding_model: str = "text-embedding-3-small"
 
     # Воркер
     worker_poll_interval: int = 30
-    worker_max_concurrent: int = 2
+    worker_max_concurrent: int = 5
+    upload_max_concurrent: int = 5  # глобальный лимит параллельных загрузок в Storage
     log_level: str = "INFO"
 
     # API

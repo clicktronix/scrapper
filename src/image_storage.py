@@ -11,7 +11,7 @@ from src.utils import is_safe_url, is_transient_network_error
 IMAGES_BUCKET = "blog-images"
 DOWNLOAD_TIMEOUT = 15.0
 MAX_DOWNLOAD_SIZE = 10 * 1024 * 1024  # 10 МБ
-MAX_CONCURRENT_UPLOADS = 2  # Ограничение параллельных загрузок в Storage
+MAX_CONCURRENT_UPLOADS = 5  # Fallback-лимит загрузок (используется если глобальный семафор не передан)
 _ALLOWED_IMAGE_MIMES = frozenset({
     "image/jpeg",
     "image/png",

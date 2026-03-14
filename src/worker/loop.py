@@ -77,6 +77,7 @@ async def process_task(
     openai_client: AsyncOpenAI,
     settings: Settings,
     semaphore: asyncio.Semaphore,
+    upload_semaphore: asyncio.Semaphore,
 ) -> None:
     """Обработать одну задачу с учётом семафора."""
     async with semaphore:
@@ -119,7 +120,10 @@ async def process_task(
 
             # Вызов handler с нужными аргументами
             if "scraper" in resolved:
-                await handler(db, task, resolved["scraper"], settings)
+                if task_type == "full_scrape":
+                    await handler(db, task, resolved["scraper"], settings, upload_semaphore)
+                else:
+                    await handler(db, task, resolved["scraper"], settings)
             elif "openai" in resolved:
                 await handler(db, task, resolved["openai"], settings)
             else:
@@ -152,6 +156,7 @@ async def run_worker(
         openai_client = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
 
     semaphore = asyncio.Semaphore(settings.worker_max_concurrent)
+    upload_semaphore = asyncio.Semaphore(settings.upload_max_concurrent)
     active_tasks: set[asyncio.Task[None]] = set()
     # Задачи, которые уже в обработке — не берём повторно при следующем poll
     processing_ids: set[str] = set()
@@ -180,7 +185,7 @@ async def run_worker(
 
                 try:
                     t = asyncio.create_task(
-                        process_task(db, task, scrapers, openai_client, settings, semaphore)
+                        process_task(db, task, scrapers, openai_client, settings, semaphore, upload_semaphore)
                     )
                 except Exception:
                     processing_ids.discard(task_id)

@@ -1,5 +1,6 @@
 """Обработчик задач скрапинга профилей."""
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -100,6 +101,7 @@ async def handle_full_scrape(
     task: dict[str, Any],
     scraper: BaseScraper,
     settings: Settings,
+    upload_semaphore: asyncio.Semaphore | None = None,
 ) -> None:
     """
     Полный скрапинг профиля.
@@ -243,6 +245,7 @@ async def handle_full_scrape(
         avatar_storage_url, post_urls = await _h.persist_profile_images(
             db, settings.supabase_url, blog_id,
             profile.profile_pic_url, posts_data,
+            upload_semaphore=upload_semaphore,
         )
         if avatar_storage_url:
             blog_data["avatar_url"] = avatar_storage_url

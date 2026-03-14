@@ -395,9 +395,10 @@ class TestProcessTask:
         mock_client = MagicMock()
         settings = MagicMock()
         sem = asyncio.Semaphore(1)
+        upload_sem = asyncio.Semaphore(5)
 
         # Не должен бросить исключение
-        await process_task(db, task, scrapers, mock_client, settings, sem)
+        await process_task(db, task, scrapers, mock_client, settings, sem, upload_sem)
 
     @pytest.mark.asyncio
     async def test_ai_analysis_dispatched(self) -> None:
@@ -410,9 +411,10 @@ class TestProcessTask:
         mock_client = MagicMock()
         settings = MagicMock()
         sem = asyncio.Semaphore(1)
+        upload_sem = asyncio.Semaphore(5)
 
         with patch("src.worker.loop.handle_ai_analysis", new_callable=AsyncMock) as mock_handler:
-            await process_task(db, task, scrapers, mock_client, settings, sem)
+            await process_task(db, task, scrapers, mock_client, settings, sem, upload_sem)
             mock_handler.assert_called_once()
 
 

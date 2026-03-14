@@ -64,7 +64,7 @@ class TestBuildAnalysisPrompt:
 
         system_text = messages[0]["content"]
         assert "инфлюенс-маркетинга" in system_text
-        assert "page_type" in system_text
+        assert "short_label" in system_text
         assert "summary" in system_text
 
     def test_user_prompt_contains_username(self) -> None:
@@ -817,13 +817,10 @@ class TestPromptIncludesTaxonomy:
         assert "brand safe" in SYSTEM_PROMPT
 
     def test_system_prompt_has_new_field_instructions(self) -> None:
-        """System prompt содержит инструкции для новых полей."""
+        """System prompt содержит инструкции для ключевых полей."""
         from src.ai.prompt import SYSTEM_PROMPT
         assert "short_label" in SYSTEM_PROMPT
-        assert "short_summary" in SYSTEM_PROMPT
         assert "tags" in SYSTEM_PROMPT
-        assert "has_manager" in SYSTEM_PROMPT
-        assert "country" in SYSTEM_PROMPT
         assert "ambassador_brands" in SYSTEM_PROMPT
 
     def test_system_prompt_instructs_code_selection(self) -> None:
@@ -1022,7 +1019,12 @@ class TestBuildAnalysisPromptPlayCountZero:
 
 
 class TestPromptNewInstructions:
-    """Тесты: промпт содержит инструкции для ранее недокументированных полей."""
+    """Тесты: промпт содержит ключевые поведенческие инструкции.
+
+    Определения полей (content_quality, collaboration_risk, brand_safety_score и т.д.)
+    перенесены в Pydantic schema descriptions — GPT-5-mini читает их из JSON-schema.
+    В промпте остаются только поведенческие правила и таксономия.
+    """
 
     def test_reasoning_instruction_in_prompt(self) -> None:
         """Промпт содержит инструкцию для reasoning."""
@@ -1030,58 +1032,25 @@ class TestPromptNewInstructions:
         assert "reasoning" in SYSTEM_PROMPT
         assert "ПЕРВЫМ" in SYSTEM_PROMPT
 
-    def test_content_quality_instruction(self) -> None:
-        from src.ai.prompt import SYSTEM_PROMPT
-        assert "content_quality" in SYSTEM_PROMPT
-        assert "студийное качество" in SYSTEM_PROMPT
+    def test_field_definitions_in_schema_descriptions(self) -> None:
+        """Определения полей находятся в schema descriptions, не в промпте."""
+        from src.ai.schemas import AIInsights
+        schema = AIInsights.model_json_schema()
+        # Проверяем что schema descriptions содержат нужные определения
+        defs = schema.get("$defs", {})
+        content_profile = defs.get("ContentProfile", {})
+        props = content_profile.get("properties", {})
+        assert "студийное" in props["content_quality"]["description"]
+        assert "posts_per_week" in props["posting_frequency"]["description"]
 
-    def test_collaboration_risk_instruction(self) -> None:
-        from src.ai.prompt import SYSTEM_PROMPT
-        assert "collaboration_risk" in SYSTEM_PROMPT
+        marketing_value = defs.get("MarketingValue", {})
+        mv_props = marketing_value.get("properties", {})
+        assert "высокий риск" in mv_props["brand_safety_score"]["description"]
 
-    def test_confidence_rubric_in_prompt(self) -> None:
+    def test_confidence_behavioral_rule(self) -> None:
+        """Промпт содержит поведенческое правило для confidence."""
         from src.ai.prompt import SYSTEM_PROMPT
-        assert "крайне мало данных" in SYSTEM_PROMPT
-
-    def test_brand_safety_rubric_in_prompt(self) -> None:
-        from src.ai.prompt import SYSTEM_PROMPT
-        assert "brand_safety_score" in SYSTEM_PROMPT
-        assert "высокий риск" in SYSTEM_PROMPT
-
-    def test_comments_sentiment_instruction(self) -> None:
-        from src.ai.prompt import SYSTEM_PROMPT
-        assert "comments_sentiment" in SYSTEM_PROMPT
-
-    def test_posting_frequency_instruction(self) -> None:
-        from src.ai.prompt import SYSTEM_PROMPT
-        assert "posting_frequency" in SYSTEM_PROMPT
-        assert "posts_per_week" in SYSTEM_PROMPT
-
-    def test_audience_interaction_instruction(self) -> None:
-        from src.ai.prompt import SYSTEM_PROMPT
-        assert "audience_interaction" in SYSTEM_PROMPT
-
-    def test_estimated_audience_age_instruction(self) -> None:
-        from src.ai.prompt import SYSTEM_PROMPT
-        assert "estimated_audience_age" in SYSTEM_PROMPT
-
-    def test_estimated_audience_geo_instruction(self) -> None:
-        from src.ai.prompt import SYSTEM_PROMPT
-        assert "estimated_audience_geo" in SYSTEM_PROMPT
-
-    def test_content_tone_instruction(self) -> None:
-        from src.ai.prompt import SYSTEM_PROMPT
-        assert "content_tone" in SYSTEM_PROMPT
-
-    def test_estimated_audience_income_instruction(self) -> None:
-        from src.ai.prompt import SYSTEM_PROMPT
-        assert "estimated_audience_income" in SYSTEM_PROMPT
-        assert "бюджетные товары" in SYSTEM_PROMPT
-
-    def test_call_to_action_style_instruction(self) -> None:
-        from src.ai.prompt import SYSTEM_PROMPT
-        assert "call_to_action_style" in SYSTEM_PROMPT
-        assert "промокоды" in SYSTEM_PROMPT
+        assert "Большинство профилей НЕ должны получать 4" in SYSTEM_PROMPT
 
 
 class TestPromptAgePctInstructions:
@@ -1096,33 +1065,33 @@ class TestPromptAgePctInstructions:
     def test_age_group_examples(self) -> None:
         """Промпт содержит примеры распределения по возрастам."""
         from src.ai.prompt import SYSTEM_PROMPT
-        assert "beauty-блогер 25 лет" in SYSTEM_PROMPT
-        assert "мама-блог 35 лет" in SYSTEM_PROMPT
+        assert "beauty 25 лет" in SYSTEM_PROMPT
+        assert "мама 35 лет" in SYSTEM_PROMPT
 
     def test_age_sum_equals_100(self) -> None:
         """Промпт указывает что сумма = 100."""
         from src.ai.prompt import SYSTEM_PROMPT
-        assert "Сумма всех групп = 100" in SYSTEM_PROMPT
+        assert "= 100" in SYSTEM_PROMPT
 
 
 class TestPromptGeoPctInstructions:
     """Тесты: промпт содержит инструкции для географических процентов аудитории."""
 
     def test_geo_pct_instructions_present(self) -> None:
-        """Промпт содержит 'kz_pct' и 'Сумма = 100'."""
+        """Промпт содержит 'kz_pct' и сумму = 100."""
         from src.ai.prompt import SYSTEM_PROMPT
         assert "kz_pct" in SYSTEM_PROMPT
-        assert "Сумма = 100" in SYSTEM_PROMPT
+        assert "= 100" in SYSTEM_PROMPT
 
     def test_geo_typical_distribution_kz(self) -> None:
-        """Промпт содержит типичное распределение для блогера из Казахстана."""
+        """Промпт содержит типичное распределение для КЗ-профиля."""
         from src.ai.prompt import SYSTEM_PROMPT
-        assert "kz=60-80" in SYSTEM_PROMPT
+        assert "60-80" in SYSTEM_PROMPT
 
     def test_geo_typical_distribution_ru(self) -> None:
-        """Промпт содержит типичное распределение для блогера из России."""
+        """Промпт содержит типичное распределение для РФ-профиля."""
         from src.ai.prompt import SYSTEM_PROMPT
-        assert "ru=70-90" in SYSTEM_PROMPT
+        assert "70-90" in SYSTEM_PROMPT
 
 
 class TestBuildAnalysisPromptAccessibility:
@@ -1285,11 +1254,11 @@ class TestDataQualityHint:
 class TestPromptQualityImprovements:
     """Тесты улучшенных промпт-определений."""
 
-    def test_tags_instruction_russian_only(self) -> None:
-        """Промпт содержит инструкцию НЕ переводить теги на английский."""
+    def test_tags_instruction_no_translation(self) -> None:
+        """Промпт содержит инструкцию НЕ переводить теги."""
         from src.ai.prompt import SYSTEM_PROMPT
 
-        assert "НЕ переводи их на английский" in SYSTEM_PROMPT
+        assert "НЕ переводи" in SYSTEM_PROMPT
 
     def test_secondary_topics_constraint(self) -> None:
         """Промпт содержит ограничение secondary_topics по primary_categories."""
@@ -1297,23 +1266,17 @@ class TestPromptQualityImprovements:
 
         assert "ДОЛЖНЫ относиться к выбранным primary_categories" in SYSTEM_PROMPT
 
-    def test_secondary_topics_must_be_from_list(self) -> None:
-        """Промпт запрещает выдумывать secondary_topics вне справочника."""
-        from src.ai.prompt import SYSTEM_PROMPT
-
-        assert "Используй ТОЛЬКО значения из списка ниже" in SYSTEM_PROMPT
-
     def test_tags_must_not_be_invented(self) -> None:
         """Промпт запрещает придумывать новые теги."""
         from src.ai.prompt import SYSTEM_PROMPT
 
-        assert "Запрещено придумывать новые теги" in SYSTEM_PROMPT
+        assert "НЕ выдумывай" in SYSTEM_PROMPT
 
     def test_engagement_quality_mixed_default(self) -> None:
         """Промпт рекомендует 'mixed' если комментарии недоступны."""
         from src.ai.prompt import SYSTEM_PROMPT
 
-        assert 'ИСПОЛЬЗУЙ "mixed" ЕСЛИ КОММЕНТАРИИ НЕДОСТУПНЫ' in SYSTEM_PROMPT
+        assert "КОММЕНТАРИИ НЕДОСТУПНЫ" in SYSTEM_PROMPT
 
     def test_confidence_strict_criteria(self) -> None:
         """Промпт содержит строгие критерии для confidence."""
@@ -1321,8 +1284,9 @@ class TestPromptQualityImprovements:
 
         assert "Большинство профилей НЕ должны получать 4" in SYSTEM_PROMPT
 
-    def test_tags_instruction_copy_exactly(self) -> None:
-        """Промпт требует копировать теги ТОЧНО из списка."""
+    def test_short_label_typical_values(self) -> None:
+        """Промпт содержит типовые значения для short_label."""
         from src.ai.prompt import SYSTEM_PROMPT
 
-        assert "Копируй теги ТОЧНО как они написаны в списке" in SYSTEM_PROMPT
+        assert "лайфстайл-блогер" in SYSTEM_PROMPT
+        assert "новостной паблик" in SYSTEM_PROMPT

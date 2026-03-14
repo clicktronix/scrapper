@@ -286,20 +286,25 @@ class AudienceGender(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     male_pct: int | None = Field(
-        ge=0, le=100, default=None,
+        default=None,
         description="Процент мужской аудитории (0-100). Сумма male+female+other=100.",
     )
     female_pct: int | None = Field(
-        ge=0, le=100, default=None,
+        default=None,
         description="Процент женской аудитории (0-100). Сумма male+female+other=100.",
     )
     other_pct: int | None = Field(
-        ge=0, le=100, default=None,
+        default=None,
         description="Процент неопределённого пола (0-100). Обычно 0-5%.",
     )
 
     @model_validator(mode="after")
-    def _warn_sum(self) -> AudienceGender:
+    def _clamp_and_warn_sum(self) -> AudienceGender:
+        # Clamp: ge/le удаляются _make_strict_schema, GPT может вернуть выход за 0-100
+        for attr in ("male_pct", "female_pct", "other_pct"):
+            v = getattr(self, attr)
+            if v is not None:
+                object.__setattr__(self, attr, max(0, min(100, v)))
         vals = [v for v in (self.male_pct, self.female_pct, self.other_pct) if v is not None]
         if vals and (total := sum(vals)) not in (0, 100):
             logger.warning(f"[schemas] AudienceGender сумма = {total}% (ожидалось 100%)")
@@ -311,34 +316,38 @@ class AudienceAge(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     pct_13_17: int | None = Field(
-        ge=0, le=100, default=None,
+        default=None,
         description="Процент аудитории 13-17 лет (0-100). "
         "Сумма всех age-групп = 100. Определяй по контенту, "
         "стилю комментариев, тематике (школьный контент, тренды TikTok).",
     )
     pct_18_24: int | None = Field(
-        ge=0, le=100, default=None,
+        default=None,
         description="Процент аудитории 18-24 лет (0-100). "
         "Молодёжь: студенты, начало карьеры, тренды, мемы.",
     )
     pct_25_34: int | None = Field(
-        ge=0, le=100, default=None,
+        default=None,
         description="Процент аудитории 25-34 лет (0-100). "
         "Молодые специалисты, молодые родители, карьерный рост.",
     )
     pct_35_44: int | None = Field(
-        ge=0, le=100, default=None,
+        default=None,
         description="Процент аудитории 35-44 лет (0-100). "
         "Зрелая аудитория: бизнес, семья, образование детей.",
     )
     pct_45_plus: int | None = Field(
-        ge=0, le=100, default=None,
+        default=None,
         description="Процент аудитории 45+ лет (0-100). "
         "Старшая аудитория: здоровье, путешествия, внуки.",
     )
 
     @model_validator(mode="after")
-    def _warn_sum(self) -> AudienceAge:
+    def _clamp_and_warn_sum(self) -> AudienceAge:
+        for attr in ("pct_13_17", "pct_18_24", "pct_25_34", "pct_35_44", "pct_45_plus"):
+            v = getattr(self, attr)
+            if v is not None:
+                object.__setattr__(self, attr, max(0, min(100, v)))
         vals = [v for v in (
             self.pct_13_17, self.pct_18_24, self.pct_25_34,
             self.pct_35_44, self.pct_45_plus,
@@ -353,26 +362,30 @@ class AudienceGeo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kz_pct: int | None = Field(
-        ge=0, le=100, default=None,
+        default=None,
         description="Процент аудитории из Казахстана (0-100). "
         "Сумма всех geo-процентов = 100. Определяй по языку, "
         "геотегам, упоминаниям городов КЗ, комментариям.",
     )
     ru_pct: int | None = Field(
-        ge=0, le=100, default=None,
+        default=None,
         description="Процент аудитории из России (0-100).",
     )
     uz_pct: int | None = Field(
-        ge=0, le=100, default=None,
+        default=None,
         description="Процент аудитории из Узбекистана (0-100).",
     )
     other_geo_pct: int | None = Field(
-        ge=0, le=100, default=None,
+        default=None,
         description="Процент аудитории из других стран (0-100).",
     )
 
     @model_validator(mode="after")
-    def _warn_sum(self) -> AudienceGeo:
+    def _clamp_and_warn_sum(self) -> AudienceGeo:
+        for attr in ("kz_pct", "ru_pct", "uz_pct", "other_geo_pct"):
+            v = getattr(self, attr)
+            if v is not None:
+                object.__setattr__(self, attr, max(0, min(100, v)))
         vals = [v for v in (
             self.kz_pct, self.ru_pct, self.uz_pct, self.other_geo_pct,
         ) if v is not None]

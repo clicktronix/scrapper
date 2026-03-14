@@ -61,6 +61,8 @@ class BatchContext:
         "tags_unmatched": 0,
         "taxonomy_errors": 0,
     })
+    # Накапливаем embedding задачи для параллельного выполнения
+    pending_embeddings: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _extract_blog_fields(insights: AIInsights) -> dict[str, Any]:
@@ -417,7 +419,6 @@ async def _process_blog_result(
 ) -> None:
     """Обработать результат одного блога из батча. Исключения пробрасываются наверх."""
     db = ctx.db
-    openai_client = ctx.openai_client
     current_by_id = ctx.current_by_id
     categories_cache = ctx.categories_cache
     tags_cache = ctx.tags_cache
@@ -537,22 +538,15 @@ async def _process_blog_result(
             except Exception as e:
                 logger.error(f"Failed to match city for blog {blog_id}: {e}")
 
-        # Генерация embedding
+        # Embedding откладываем — выполним параллельно после обработки всех блогов
         try:
             embedding_text = _h.build_embedding_text(insights)
             if embedding_text is None:
                 logger.warning(f"[batch_results] Blog {blog_id}: пустой текст для embedding, пропускаем")
             else:
-                vector = await _h.generate_embedding(openai_client, embedding_text)
-                if vector:
-                    await _h.run_in_thread(
-                        db.table("blogs").update({
-                            "embedding": vector,
-                        }).eq("id", blog_id).execute
-                    )
-                    logger.debug(f"[batch_results] Blog {blog_id}: embedding saved ({len(vector)} dim)")
+                ctx.pending_embeddings.append((blog_id, embedding_text))
         except Exception as e:
-            logger.error(f"Failed to generate embedding for blog {blog_id}: {e}")
+            logger.error(f"Failed to build embedding text for blog {blog_id}: {e}")
 
 
 async def handle_batch_results(
@@ -695,6 +689,27 @@ async def handle_batch_results(
                         db, task_id, attempts, max_attempts,
                         "Batch expired without result for this task", retry=True,
                     )
+
+    # Параллельная генерация embedding для всех блогов батча
+    if ctx.pending_embeddings:
+        async def _generate_and_save(blog_id: str, text: str) -> None:
+            try:
+                vector = await _h.generate_embedding(openai_client, text)
+                if vector:
+                    await _h.run_in_thread(
+                        db.table("blogs").update({
+                            "embedding": vector,
+                        }).eq("id", blog_id).execute
+                    )
+                    logger.debug(f"[batch_results] Blog {blog_id}: embedding saved ({len(vector)} dim)")
+            except Exception as e:
+                logger.error(f"Failed to generate embedding for blog {blog_id}: {e}")
+
+        logger.info(f"[batch_results] Generating {len(ctx.pending_embeddings)} embeddings in parallel...")
+        await asyncio.gather(*[
+            _generate_and_save(blog_id, text)
+            for blog_id, text in ctx.pending_embeddings
+        ])
 
     tm = ctx.taxonomy_metrics
     logger.info(

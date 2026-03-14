@@ -295,8 +295,15 @@ class HikerInstagramScraper:
                 raw_comments = await asyncio.to_thread(
                     self.cl.media_comments_chunk_v1, post.platform_id
                 )
+                # media_comments_chunk_v1 возвращает [comments_list, max_id, can_support_threading]
+                if isinstance(raw_comments, list) and raw_comments and isinstance(raw_comments[0], list):
+                    comment_items = raw_comments[0]
+                else:
+                    comment_items = raw_comments or []
                 comments: list[ScrapedComment] = []
-                for c in (raw_comments or [])[:self.settings.comments_to_fetch]:
+                for c in comment_items[:self.settings.comments_to_fetch]:
+                    if not isinstance(c, dict):
+                        continue
                     text = c.get("text", "").strip()
                     comment_user = c.get("user") or {}
                     uname = comment_user.get("username", "")

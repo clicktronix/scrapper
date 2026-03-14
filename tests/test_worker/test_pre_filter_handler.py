@@ -525,6 +525,67 @@ class TestHandlePreFilter:
             assert update_data["status"] == "done"
             assert update_data["error_message"] == "filtered_out: low_engagement"
 
+    @pytest.mark.asyncio
+    async def test_er_heuristic_detects_hidden_likes_for_large_accounts(self) -> None:
+        """50K+ подписчиков и ER < 0.1% без флага → определяем как скрытые лайки, не фильтруем."""
+        from src.worker.pre_filter_handler import handle_pre_filter
+
+        task = make_task("pre_filter", blog_id=None, payload={"username": "hidden_likes_user"})
+        db = make_db_mock()
+        # 200K подписчиков, like_count=5 (фейковый от HikerAPI), флаг НЕ выставлен
+        scraper = _make_scraper(
+            _make_user_info(follower_count=200_000),
+            posts=_make_medias(count=5, like_count=5, likes_hidden=False),
+            clips=_empty_medias(),
+        )
+
+        person_result = MagicMock()
+        person_result.data = [{"id": "person-1"}]
+        blog_result = MagicMock()
+        blog_result.data = [{"id": "blog-1"}]
+        insert_count = 0
+
+        async def mock_rit(func, *args, **kwargs):
+            nonlocal insert_count
+            insert_count += 1
+            if insert_count == 1:
+                return _no_blog_result()
+            return person_result if insert_count == 2 else blog_result
+
+        with (
+            patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
+            patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
+            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=mock_rit),
+            patch(f"{_MOD}._h.mark_task_done", new_callable=AsyncMock) as mock_done,
+        ):
+            await handle_pre_filter(db, task, scraper, _pf_settings())
+            # ER = 5/200000 = 0.0025% → hidden likes → НЕ фильтруем → создаём blog
+            mock_done.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_er_heuristic_skips_small_accounts(self) -> None:
+        """<50K подписчиков — ER-эвристика не применяется, low_engagement фильтруется."""
+        from src.worker.pre_filter_handler import handle_pre_filter
+
+        task = make_task("pre_filter", blog_id=None, payload={"username": "small_shop"})
+        db = make_db_mock()
+        # 40K подписчиков, like_count=5 → ER = 0.0125%, но <50K → не hidden likes
+        scraper = _make_scraper(
+            _make_user_info(follower_count=40_000),
+            posts=_make_medias(count=5, like_count=5, likes_hidden=False),
+            clips=_empty_medias(),
+        )
+
+        with (
+            patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
+            patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
+            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=_wrap_with_blog_check()),
+        ):
+            await handle_pre_filter(db, task, scraper, _pf_settings())
+
+            update_data = db.table.return_value.update.call_args_list[0][0][0]
+            assert update_data["error_message"] == "filtered_out: low_engagement"
+
     # --- Новые тесты ---
 
     @pytest.mark.asyncio

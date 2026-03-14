@@ -96,13 +96,14 @@ class TestProcessTask:
         mock_openai = MagicMock()
         settings = MagicMock()
         semaphore = asyncio.Semaphore(2)
+        upload_semaphore = asyncio.Semaphore(5)
 
         with patch("src.worker.loop.handle_full_scrape", new_callable=AsyncMock) as mock_handler:
             await process_task(
                 mock_db, task, {"instagram": mock_scraper},
-                mock_openai, settings, semaphore,
+                mock_openai, settings, semaphore, upload_semaphore,
             )
-            mock_handler.assert_called_once_with(mock_db, task, mock_scraper, settings)
+            mock_handler.assert_called_once_with(mock_db, task, mock_scraper, settings, upload_semaphore)
 
     @pytest.mark.asyncio
     async def test_dispatches_ai_analysis(self) -> None:
@@ -120,10 +121,11 @@ class TestProcessTask:
         mock_openai = MagicMock()
         settings = MagicMock()
         semaphore = asyncio.Semaphore(2)
+        upload_semaphore = asyncio.Semaphore(5)
 
         with patch("src.worker.loop.handle_ai_analysis", new_callable=AsyncMock) as mock_handler:
             await process_task(
-                mock_db, task, {}, mock_openai, settings, semaphore,
+                mock_db, task, {}, mock_openai, settings, semaphore, upload_semaphore,
             )
             mock_handler.assert_called_once_with(mock_db, task, mock_openai, settings)
 
@@ -144,11 +146,12 @@ class TestProcessTask:
         mock_openai = MagicMock()
         settings = MagicMock()
         semaphore = asyncio.Semaphore(2)
+        upload_semaphore = asyncio.Semaphore(5)
 
         with patch("src.worker.loop.handle_discover", new_callable=AsyncMock) as mock_handler:
             await process_task(
                 mock_db, task, {"instagram": mock_scraper},
-                mock_openai, settings, semaphore,
+                mock_openai, settings, semaphore, upload_semaphore,
             )
             mock_handler.assert_called_once_with(mock_db, task, mock_scraper, settings)
 
@@ -169,10 +172,12 @@ class TestProcessTask:
         settings = MagicMock()
         semaphore = asyncio.Semaphore(2)
 
+        upload_semaphore = asyncio.Semaphore(5)
+
         with patch("src.worker.loop.mark_task_failed", new_callable=AsyncMock) as mock_failed:
             # Не должен упасть
             await process_task(
-                mock_db, task, {}, mock_openai, settings, semaphore,
+                mock_db, task, {}, mock_openai, settings, semaphore, upload_semaphore,
             )
             mock_failed.assert_called_once()
             assert mock_failed.call_args.kwargs["retry"] is False
@@ -187,10 +192,11 @@ class TestProcessTask:
         mock_openai = MagicMock()
         settings = MagicMock()
         semaphore = asyncio.Semaphore(2)
+        upload_semaphore = asyncio.Semaphore(5)
 
         with patch("src.worker.loop.mark_task_failed", new_callable=AsyncMock) as mock_failed:
             # scrapers пустой — нет instagram
-            await process_task(mock_db, task, {}, mock_openai, settings, semaphore)
+            await process_task(mock_db, task, {}, mock_openai, settings, semaphore, upload_semaphore)
             mock_failed.assert_called_once()
             assert mock_failed.call_args.kwargs["retry"] is False
 
@@ -204,9 +210,10 @@ class TestProcessTask:
         mock_openai = MagicMock()
         settings = MagicMock()
         semaphore = asyncio.Semaphore(2)
+        upload_semaphore = asyncio.Semaphore(5)
 
         with patch("src.worker.loop.mark_task_failed", new_callable=AsyncMock) as mock_failed:
-            await process_task(mock_db, task, {}, mock_openai, settings, semaphore)
+            await process_task(mock_db, task, {}, mock_openai, settings, semaphore, upload_semaphore)
             mock_failed.assert_called_once()
             assert mock_failed.call_args.kwargs["retry"] is False
 
@@ -221,6 +228,7 @@ class TestProcessTask:
         mock_openai = MagicMock()
         settings = MagicMock()
         semaphore = asyncio.Semaphore(2)
+        upload_semaphore = asyncio.Semaphore(5)
 
         with patch(
             "src.worker.loop.handle_full_scrape",
@@ -230,7 +238,7 @@ class TestProcessTask:
             # Не должен пробросить исключение
             await process_task(
                 mock_db, task, {"instagram": mock_scraper},
-                mock_openai, settings, semaphore,
+                mock_openai, settings, semaphore, upload_semaphore,
             )
 
     @pytest.mark.asyncio
@@ -254,14 +262,16 @@ class TestProcessTask:
         mock_openai = MagicMock()
         settings = MagicMock()
 
+        upload_semaphore = asyncio.Semaphore(5)
+
         with patch("src.worker.loop.handle_full_scrape", side_effect=slow_handler):
             t1 = asyncio.create_task(
                 process_task(mock_db, task1, {"instagram": mock_scraper},
-                             mock_openai, settings, semaphore)
+                             mock_openai, settings, semaphore, upload_semaphore)
             )
             t2 = asyncio.create_task(
                 process_task(mock_db, task2, {"instagram": mock_scraper},
-                             mock_openai, settings, semaphore)
+                             mock_openai, settings, semaphore, upload_semaphore)
             )
             await asyncio.gather(t1, t2)
 
@@ -280,6 +290,7 @@ class TestRunWorker:
         settings = MagicMock()
         settings.worker_poll_interval = 1
         settings.worker_max_concurrent = 2
+        settings.upload_max_concurrent = 5
         settings.openai_api_key = "test"
 
         shutdown_event = asyncio.Event()
@@ -308,6 +319,7 @@ class TestRunWorker:
         settings = MagicMock()
         settings.worker_poll_interval = 0.1
         settings.worker_max_concurrent = 2
+        settings.upload_max_concurrent = 5
         settings.openai_api_key = "test"
 
         shutdown_event = asyncio.Event()
@@ -335,6 +347,7 @@ class TestRunWorker:
         settings = MagicMock()
         settings.worker_poll_interval = 0.1
         settings.worker_max_concurrent = 2
+        settings.upload_max_concurrent = 5
         settings.openai_api_key = "test"
 
         shutdown_event = asyncio.Event()
@@ -375,6 +388,7 @@ class TestRunWorker:
         settings = MagicMock()
         settings.worker_poll_interval = 0.1
         settings.worker_max_concurrent = 2
+        settings.upload_max_concurrent = 5
         settings.openai_api_key = "test"
 
         shutdown_event = asyncio.Event()
@@ -404,6 +418,7 @@ class TestRunWorker:
         settings = MagicMock()
         settings.worker_poll_interval = 0.1
         settings.worker_max_concurrent = 5
+        settings.upload_max_concurrent = 5
         settings.openai_api_key = "test"
 
         shutdown_event = asyncio.Event()
@@ -447,6 +462,7 @@ class TestRunWorker:
         settings = MagicMock()
         settings.worker_poll_interval = 0.1
         settings.worker_max_concurrent = 5
+        settings.upload_max_concurrent = 5
         settings.openai_api_key = "test"
 
         shutdown_event = asyncio.Event()

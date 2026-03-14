@@ -169,6 +169,7 @@ def build_batch_request(
         "url": "/v1/chat/completions",
         "body": {
             "model": settings.batch_model,
+            "reasoning_effort": settings.batch_reasoning_effort,
             "messages": messages,
             "response_format": {
                 "type": "json_schema",
