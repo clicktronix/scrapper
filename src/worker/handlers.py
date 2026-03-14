@@ -50,6 +50,7 @@ from src.worker.ai_handler import (  # noqa: F401
     handle_ai_analysis,
     handle_batch_results,
 )
+from src.worker.blog_data import build_blog_data_from_user  # noqa: F401
 from src.worker.discover_handler import handle_discover  # noqa: F401
 from src.worker.scrape_handler import (  # noqa: F401
     _normalize_username,

@@ -129,6 +129,19 @@ async def handle_pre_filter(
 
     username = _normalize_username(username)
 
+    # Проверяем, нет ли уже блога — чтобы не тратить HikerAPI запросы зря
+    existing_blog = await _h.run_in_thread(
+        db.table("blogs")
+        .select("id")
+        .eq("platform", "instagram")
+        .eq("username", username)
+        .execute
+    )
+    if existing_blog.data:
+        logger.info(f"[pre_filter] @{username}: блог уже существует, пропускаем")
+        await _h.mark_task_done(db, task_id)
+        return
+
     was_claimed = await _h.mark_task_running(db, task_id)
     if not was_claimed:
         logger.debug(f"Task {task_id} was already claimed by another worker")
@@ -308,22 +321,15 @@ async def handle_pre_filter(
     person_id: str | None = None
     try:
         full_name = user.get("full_name") or username
-        platform_id = str(user.get("pk", ""))
 
         person_result = await _h.run_in_thread(db.table("persons").insert({"full_name": full_name}).execute)
         person_id = _extract_inserted_id(person_result.data)
         if person_id is None:
             raise ValueError("Invalid persons insert response: missing id")
 
-        blog_insert_data: dict[str, Any] = {
-            "person_id": person_id,
-            "platform": "instagram",
-            "username": username,
-            "platform_id": platform_id,
-            "followers_count": user.get("follower_count"),
-            "source": "xlsx_import",
-            "scrape_status": "pending",
-        }
+        blog_insert_data = _h.build_blog_data_from_user(
+            user, person_id=person_id, username=username,
+        )
 
         blog_result = await _h.run_in_thread(db.table("blogs").insert(blog_insert_data).execute)
         blog_id = _extract_inserted_id(blog_result.data)
