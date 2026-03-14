@@ -47,6 +47,22 @@ class TestHealth:
         assert data["tasks_pending"] == -1
 
 
+class TestApiDocs:
+    def test_docs_disabled_by_default(self) -> None:
+        app = make_app()
+        client = TestClient(app)
+        assert client.get("/docs").status_code == 404
+
+    def test_docs_enabled_when_flag_true(self) -> None:
+        settings = MagicMock()
+        settings.scraper_api_key.get_secret_value.return_value = "sk-test-key"
+        settings.rescrape_days = 60
+        settings.api_docs_enabled = True
+        app = make_app(settings=settings)
+        client = TestClient(app)
+        assert client.get("/docs").status_code == 200
+
+
 class TestAuth:
     """Авторизация по API key."""
 

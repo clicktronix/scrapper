@@ -308,6 +308,27 @@ class TestRecoverStuck:
             assert result == 1
 
     @pytest.mark.asyncio
+    async def test_recover_includes_pre_filter_tasks(self):
+        db, _, _ = _mock_supabase()
+        repo = SupabaseTaskRepository(db)
+        stuck_tasks = [
+            {"id": "pf-1", "task_type": "pre_filter", "attempts": 1, "max_attempts": 3}
+        ]
+
+        with patch(
+            "src.repositories.task_repository.run_in_thread",
+            new_callable=AsyncMock,
+        ) as mock_run:
+            mock_run.side_effect = [
+                MagicMock(data=stuck_tasks),  # select short-running types
+                MagicMock(data=[]),  # ai select
+                MagicMock(data=[]),  # update
+            ]
+            result = await repo.recover_stuck()
+            assert result == 1
+            assert "pre_filter" in db.table.return_value.in_.call_args[0][1]
+
+    @pytest.mark.asyncio
     async def test_recover_stuck_exhausted(self):
         db, _, _ = _mock_supabase()
         repo = SupabaseTaskRepository(db)

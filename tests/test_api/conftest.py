@@ -8,6 +8,11 @@ def make_settings():
     settings = MagicMock()
     settings.scraper_api_key.get_secret_value.return_value = "sk-test-key"
     settings.rescrape_days = 60
+    settings.rate_limit_max_requests = 60
+    settings.rate_limit_window_seconds = 60
+    settings.rate_limit_trust_forwarded_for = False
+    settings.trusted_proxy_ip_list = []
+    settings.api_docs_enabled = False
     return settings
 
 

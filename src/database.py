@@ -232,13 +232,13 @@ async def fetch_pending_tasks(db: Client, limit: int = 10) -> list[TaskRecord]:
 async def recover_stuck_tasks(
     db: Client,
     max_running_minutes: int = 30,
-    max_ai_running_minutes: int = 120,
+    max_ai_running_minutes: int = 1440,
 ) -> int:
     """
     Вернуть зависшие running задачи в pending.
 
     full_scrape/discover — таймаут max_running_minutes (30 мин).
-    ai_analysis — таймаут max_ai_running_minutes (2ч).
+    ai_analysis — таймаут max_ai_running_minutes (по умолчанию 24ч).
       AI задачи зависают если handle_batch_results упал с исключением
       (например \u0000 в PostgreSQL). retry_stale_batches — последняя линия
       обороны (4ч), а эта функция — основная.

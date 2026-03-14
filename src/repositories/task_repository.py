@@ -129,7 +129,7 @@ class SupabaseTaskRepository:
     async def recover_stuck(
         self,
         max_running_minutes: int = 30,
-        max_ai_running_minutes: int = 120,
+        max_ai_running_minutes: int = 1440,
     ) -> int:
         """Вернуть зависшие running задачи в pending."""
         threshold = (
@@ -139,17 +139,17 @@ class SupabaseTaskRepository:
             datetime.now(UTC) - timedelta(minutes=max_ai_running_minutes)
         ).isoformat()
 
-        # full_scrape / discover — короткий таймаут
+        # full_scrape / discover / pre_filter — короткий таймаут
         result = await run_in_thread(
             self._db.table("scrape_tasks")
             .select("id, task_type, attempts, max_attempts")
             .eq("status", "running")
-            .in_("task_type", ["full_scrape", "discover"])
+            .in_("task_type", ["full_scrape", "discover", "pre_filter"])
             .lt("started_at", threshold)
             .execute
         )
 
-        # ai_analysis — длинный таймаут (батчи обрабатываются 1-2ч)
+        # ai_analysis — длинный таймаут, т.к. completion_window=24h
         ai_result = await run_in_thread(
             self._db.table("scrape_tasks")
             .select("id, task_type, attempts, max_attempts")

@@ -20,6 +20,12 @@ class TestBuildPublicUrl:
         url = build_public_url("https://example.supabase.co/", "blog-1/avatar.jpg")
         assert url == "https://example.supabase.co/storage/v1/object/public/blog-images/blog-1/avatar.jpg"
 
+    def test_rejects_unsafe_path(self) -> None:
+        from src.image_storage import build_public_url
+
+        with pytest.raises(ValueError, match="Unsafe storage path"):
+            build_public_url("https://example.supabase.co", "../avatar.jpg")
+
 
 class TestDownloadImage:
     """Тесты download_image."""
@@ -32,6 +38,7 @@ class TestDownloadImage:
         mock_response.content = b"\xff\xd8\xff" * 100
         mock_response.headers = {"content-type": "image/jpeg"}
         mock_response.raise_for_status = MagicMock()
+        mock_response.url = "https://cdn.instagram.com/photo.jpg"
 
         mock_client = AsyncMock(spec=httpx.AsyncClient)
         mock_client.get.return_value = mock_response
@@ -76,6 +83,7 @@ class TestDownloadImage:
         mock_response.content = b"\x00" * (MAX_DOWNLOAD_SIZE + 1)
         mock_response.headers = {"content-type": "image/jpeg"}
         mock_response.raise_for_status = MagicMock()
+        mock_response.url = "https://cdn.instagram.com/photo.jpg"
 
         mock_client = AsyncMock(spec=httpx.AsyncClient)
         mock_client.get.return_value = mock_response
@@ -91,6 +99,7 @@ class TestDownloadImage:
         mock_response.content = b"<html>Not an image</html>"
         mock_response.headers = {"content-type": "text/html"}
         mock_response.raise_for_status = MagicMock()
+        mock_response.url = "https://cdn.instagram.com/photo.jpg"
 
         mock_client = AsyncMock(spec=httpx.AsyncClient)
         mock_client.get.return_value = mock_response
@@ -108,6 +117,7 @@ class TestDownloadImage:
         mock_response.content = b"<svg></svg>"
         mock_response.headers = {"content-type": "image/svg+xml"}
         mock_response.raise_for_status = MagicMock()
+        mock_response.url = "https://cdn.instagram.com/photo.svg"
 
         mock_client = AsyncMock(spec=httpx.AsyncClient)
         mock_client.get.return_value = mock_response
@@ -124,6 +134,7 @@ class TestDownloadImage:
         mock_response.content = b"\x00webp" * 10
         mock_response.headers = {"content-type": "image/webp"}
         mock_response.raise_for_status = MagicMock()
+        mock_response.url = "https://cdn.instagram.com/photo.webp"
 
         mock_client = AsyncMock(spec=httpx.AsyncClient)
         mock_client.get.return_value = mock_response
@@ -133,6 +144,22 @@ class TestDownloadImage:
         data, content_type = result
         assert data == mock_response.content
         assert content_type == "image/webp"
+
+    @pytest.mark.asyncio
+    async def test_rejects_unsafe_redirect_url(self) -> None:
+        from src.image_storage import download_image
+
+        mock_response = MagicMock()
+        mock_response.content = b"\xff\xd8\xff" * 10
+        mock_response.headers = {"content-type": "image/jpeg"}
+        mock_response.raise_for_status = MagicMock()
+        mock_response.url = "http://127.0.0.1/internal.jpg"
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_client.get.return_value = mock_response
+
+        result = await download_image("https://cdn.instagram.com/photo.jpg", mock_client)
+        assert result is None
 
 
 class TestUploadImage:
@@ -403,3 +430,30 @@ class TestDeleteBlogImages:
 
             result = await delete_blog_images(mock_db, "blog-1")
             assert result == 0
+
+    @pytest.mark.asyncio
+    async def test_skips_unsafe_file_names(self) -> None:
+        from src.image_storage import delete_blog_images
+
+        mock_db = MagicMock()
+        files = [
+            {"name": "avatar.jpg"},
+            {"name": "../outside.jpg"},
+            {"name": "safe_post.jpg"},
+        ]
+
+        with patch("src.image_storage.run_in_thread", new_callable=AsyncMock) as mock_run:
+            mock_run.side_effect = [files, None, MagicMock()]
+            result = await delete_blog_images(mock_db, "blog-1")
+
+        assert result == 1
+
+    @pytest.mark.asyncio
+    async def test_rejects_unsafe_blog_id(self) -> None:
+        from src.image_storage import delete_blog_images
+
+        mock_db = MagicMock()
+        with patch("src.image_storage.run_in_thread", new_callable=AsyncMock) as mock_run:
+            result = await delete_blog_images(mock_db, "../evil")
+        assert result == 0
+        mock_run.assert_not_called()

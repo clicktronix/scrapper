@@ -206,33 +206,13 @@ async def match_categories(
         })
 
     if rows:
-        # Удаляем старые категории перед вставкой —
-        # partial unique index blog_categories_one_primary не позволяет
-        # upsert новой primary категории при существующей старой.
-        # DELETE + INSERT — два HTTP-запроса (не атомарно), поэтому
-        # при constraint violation ретраим один раз.
-        for attempt in range(2):
-            await run_in_thread(
-                db.table("blog_categories")
-                .delete()
-                .eq("blog_id", blog_id)
-                .execute
-            )
-            try:
-                await run_in_thread(
-                    db.table("blog_categories")
-                    .insert(rows)
-                    .execute
-                )
-                break
-            except Exception as e:
-                if attempt == 0 and "23505" in str(e):
-                    logger.warning(
-                        f"[match_categories] Constraint violation для blog {blog_id}, "
-                        f"повторная попытка delete+insert"
-                    )
-                    continue
-                raise
+        # Атомарная замена связей через RPC (DELETE+INSERT внутри одной транзакции в БД).
+        await run_in_thread(
+            db.rpc("set_blog_categories_for_scraper", {
+                "p_blog_id": blog_id,
+                "p_categories": rows,
+            }).execute
+        )
 
     return {
         "total": total,
@@ -467,30 +447,13 @@ async def match_tags(
             rows.append({"blog_id": blog_id, "tag_id": tag_id})
 
     if rows:
-        # DELETE + INSERT — два HTTP-запроса (не атомарно), поэтому
-        # при constraint violation ретраим один раз.
-        for attempt in range(2):
-            await run_in_thread(
-                db.table("blog_tags")
-                .delete()
-                .eq("blog_id", blog_id)
-                .execute
-            )
-            try:
-                await run_in_thread(
-                    db.table("blog_tags")
-                    .insert(rows)
-                    .execute
-                )
-                break
-            except Exception as e:
-                if attempt == 0 and "23505" in str(e):
-                    logger.warning(
-                        f"[match_tags] Constraint violation для blog {blog_id}, "
-                        f"повторная попытка delete+insert"
-                    )
-                    continue
-                raise
+        # Атомарная замена связей через RPC (DELETE+INSERT внутри одной транзакции в БД).
+        await run_in_thread(
+            db.rpc("set_blog_tags_for_scraper", {
+                "p_blog_id": blog_id,
+                "p_tags": rows,
+            }).execute
+        )
 
     return {
         "total": len(insights.tags),

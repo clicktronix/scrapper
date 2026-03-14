@@ -126,7 +126,7 @@ async def process_task(
                 await handler(db, task, settings)
 
         except Exception as e:
-            logger.exception(f"Unhandled error in task {task_id}: {e}")
+            logger.exception(f"Unhandled error in task {task_id}")
             try:
                 await mark_task_failed(
                     db, task_id, attempts, max_attempts,
@@ -178,14 +178,19 @@ async def run_worker(
                     continue
                 processing_ids.add(task_id)
 
-                t = asyncio.create_task(
-                    process_task(db, task, scrapers, openai_client, settings, semaphore)
-                )
+                try:
+                    t = asyncio.create_task(
+                        process_task(db, task, scrapers, openai_client, settings, semaphore)
+                    )
+                except Exception:
+                    processing_ids.discard(task_id)
+                    raise
+
                 active_tasks.add(t)
                 t.add_done_callback(lambda done_t, tid=task_id: _on_task_done(tid, done_t))
 
-        except Exception as e:
-            logger.exception(f"Error in worker loop: {e}")
+        except Exception:
+            logger.exception("Error in worker loop")
 
         # Ждём poll_interval или shutdown
         with contextlib.suppress(TimeoutError):

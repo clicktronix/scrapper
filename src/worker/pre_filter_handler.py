@@ -45,18 +45,23 @@ async def _mark_filtered_out(
 ) -> None:
     """Пометить задачу как done и записать в pre_filter_log."""
     await _h.run_in_thread(
-        db.table("scrape_tasks").update({
-            "status": "done",
-            "completed_at": datetime.now(UTC).isoformat(),
-            "error_message": f"filtered_out: {reason}",
-        }).eq("id", task_id).execute
+        db.table("scrape_tasks")
+        .update(
+            {
+                "status": "done",
+                "completed_at": datetime.now(UTC).isoformat(),
+                "error_message": f"filtered_out: {reason}",
+            }
+        )
+        .eq("id", task_id)
+        .execute
     )
     log_row: dict[str, Any] = {
         "username": username,
         "reason": reason,
         "task_id": task_id,
     }
-    if platform_id:
+    if platform_id is not None:
         log_row["platform_id"] = platform_id
     if followers_count is not None:
         log_row["followers_count"] = followers_count
@@ -70,7 +75,9 @@ async def _mark_filtered_out(
         log_row["clips_count"] = clips_count
     try:
         await _h.run_in_thread(
-            db.table("pre_filter_log").insert(log_row).execute
+            db.table("pre_filter_log")
+            .upsert(log_row, on_conflict="username,reason")
+            .execute
         )
     except Exception:
         logger.warning(f"[pre_filter] Не удалось записать лог для @{username}")
@@ -115,8 +122,9 @@ async def handle_pre_filter(
     username = payload.get("username", "")
 
     if not username:
-        await _h.mark_task_failed(db, task_id, task["attempts"], task["max_attempts"],
-                                  "No username in payload", retry=False)
+        await _h.mark_task_failed(
+            db, task_id, task["attempts"], task["max_attempts"], "No username in payload", retry=False
+        )
         return
 
     username = _normalize_username(username)
@@ -141,8 +149,9 @@ async def handle_pre_filter(
         return
     except InsufficientBalanceError as e:
         logger.error(f"[pre_filter] HikerAPI баланс исчерпан: {e}")
-        await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
-                                  "HikerAPI: insufficient balance", retry=False)
+        await _h.mark_task_failed(
+            db, task_id, current_attempts, task["max_attempts"], "HikerAPI: insufficient balance", retry=False
+        )
         return
     except HikerAPIError as e:
         # 404 = аккаунт не существует — логируем как not_found, не тратим retry
@@ -151,12 +160,14 @@ async def handle_pre_filter(
             await _mark_filtered_out(db, task_id, "not_found", username=username)
             return
         retry = e.status_code in (429, 500, 502, 503, 504)
-        await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
-                                  _h.sanitize_error(str(e)), retry=retry)
+        await _h.mark_task_failed(
+            db, task_id, current_attempts, task["max_attempts"], _h.sanitize_error(str(e)), retry=retry
+        )
         return
     except AllAccountsCooldownError as e:
-        await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
-                                  _h.sanitize_error(str(e)), retry=True)
+        await _h.mark_task_failed(
+            db, task_id, current_attempts, task["max_attempts"], _h.sanitize_error(str(e)), retry=True
+        )
         return
 
     user = user_info.get("user", {})
@@ -165,7 +176,10 @@ async def handle_pre_filter(
     if user.get("is_private"):
         logger.info(f"[pre_filter] @{username}: приватный аккаунт")
         await _mark_filtered_out(
-            db, task_id, "private", username=username,
+            db,
+            task_id,
+            "private",
+            username=username,
             platform_id=str(user.get("pk", "")),
             followers_count=user.get("follower_count"),
         )
@@ -181,34 +195,37 @@ async def handle_pre_filter(
         )
     except InsufficientBalanceError as e:
         logger.error(f"[pre_filter] HikerAPI баланс исчерпан: {e}")
-        await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
-                                  "HikerAPI: insufficient balance", retry=False)
+        await _h.mark_task_failed(
+            db, task_id, current_attempts, task["max_attempts"], "HikerAPI: insufficient balance", retry=False
+        )
         return
     except HikerAPIError as e:
         # 404 при запросе постов = "Entries not found" — аккаунт пустой/удалён
         if e.status_code == 404:
             logger.info(f"[pre_filter] @{username}: посты не найдены (HikerAPI 404)")
             await _mark_filtered_out(
-                db, task_id, "not_found", username=username,
-                platform_id=user_id, followers_count=user.get("follower_count"),
+                db,
+                task_id,
+                "not_found",
+                username=username,
+                platform_id=user_id,
+                followers_count=user.get("follower_count"),
             )
             return
         retry = e.status_code in (429, 500, 502, 503, 504)
-        await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
-                                  _h.sanitize_error(str(e)), retry=retry)
+        await _h.mark_task_failed(
+            db, task_id, current_attempts, task["max_attempts"], _h.sanitize_error(str(e)), retry=retry
+        )
         return
     except AllAccountsCooldownError as e:
-        await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
-                                  _h.sanitize_error(str(e)), retry=True)
+        await _h.mark_task_failed(
+            db, task_id, current_attempts, task["max_attempts"], _h.sanitize_error(str(e)), retry=True
+        )
         return
 
     # Оба endpoint возвращают [medias_list, cursor]
-    raw_posts: list[dict[str, Any]] = (
-        posts_result[0] if isinstance(posts_result, list) and posts_result else []
-    )
-    raw_clips: list[dict[str, Any]] = (
-        clips_result[0] if isinstance(clips_result, list) and clips_result else []
-    )
+    raw_posts: list[dict[str, Any]] = posts_result[0] if isinstance(posts_result, list) and posts_result else []
+    raw_clips: list[dict[str, Any]] = clips_result[0] if isinstance(clips_result, list) and clips_result else []
     # Объединяем посты и рилсы для проверки
     all_medias = raw_posts + raw_clips
 
@@ -216,9 +233,14 @@ async def handle_pre_filter(
     if not all_medias:
         logger.info(f"[pre_filter] @{username}: нет постов и рилсов")
         await _mark_filtered_out(
-            db, task_id, "inactive", username=username,
-            platform_id=user_id, followers_count=user.get("follower_count"),
-            posts_count=0, clips_count=0,
+            db,
+            task_id,
+            "inactive",
+            username=username,
+            platform_id=user_id,
+            followers_count=user.get("follower_count"),
+            posts_count=0,
+            clips_count=0,
         )
         return
 
@@ -229,41 +251,58 @@ async def handle_pre_filter(
         if taken_at and (latest_taken_at is None or taken_at > latest_taken_at):
             latest_taken_at = taken_at
 
-    logger.debug(
-        f"[pre_filter] @{username}: posts={len(raw_posts)}, clips={len(raw_clips)}, "
-        f"latest={latest_taken_at}"
-    )
+    logger.debug(f"[pre_filter] @{username}: posts={len(raw_posts)}, clips={len(raw_clips)}, latest={latest_taken_at}")
 
     if latest_taken_at:
         days_since = (datetime.now(UTC) - latest_taken_at).days
         if days_since > settings.pre_filter_max_inactive_days:
             logger.info(f"[pre_filter] @{username}: неактивен {days_since} дней")
             await _mark_filtered_out(
-                db, task_id, "inactive", username=username,
-                platform_id=user_id, followers_count=user.get("follower_count"),
+                db,
+                task_id,
+                "inactive",
+                username=username,
+                platform_id=user_id,
+                followers_count=user.get("follower_count"),
                 latest_post_at=latest_taken_at,
-                posts_count=len(raw_posts), clips_count=len(raw_clips),
+                posts_count=len(raw_posts),
+                clips_count=len(raw_clips),
             )
             return
 
     # Критерий 3: низкая вовлечённость (среднее кол-во лайков по всем медиа)
-    posts_to_check = all_medias[:settings.pre_filter_posts_to_check]
-    total_likes = sum(
-        p.get("like_count", 0) or 0 for p in posts_to_check
-    )
+    # Instagram позволяет скрывать лайки — HikerAPI возвращает like_count=3 (фиктивное).
+    # Проверяем флаг like_and_view_counts_disabled.
+    likes_hidden = any(m.get("like_and_view_counts_disabled") for m in all_medias)
+
+    posts_to_check = all_medias[: settings.pre_filter_posts_to_check]
+    total_likes = sum(p.get("like_count", 0) or 0 for p in posts_to_check)
     avg_likes = total_likes / len(posts_to_check) if posts_to_check else 0
 
-    logger.debug(f"[pre_filter] @{username}: avg_likes={avg_likes:.0f} (порог={settings.pre_filter_min_likes})")
+    logger.debug(
+        f"[pre_filter] @{username}: avg_likes={avg_likes:.0f} "
+        f"(порог={settings.pre_filter_min_likes}), likes_hidden={likes_hidden}"
+    )
 
-    if avg_likes < settings.pre_filter_min_likes:
+    if avg_likes < settings.pre_filter_min_likes and not likes_hidden:
+        followers = user.get("follower_count") or 0
         logger.info(f"[pre_filter] @{username}: avg likes {avg_likes:.0f} < {settings.pre_filter_min_likes}")
         await _mark_filtered_out(
-            db, task_id, "low_engagement", username=username,
-            platform_id=user_id, followers_count=user.get("follower_count"),
-            avg_likes=avg_likes, latest_post_at=latest_taken_at,
-            posts_count=len(raw_posts), clips_count=len(raw_clips),
+            db,
+            task_id,
+            "low_engagement",
+            username=username,
+            platform_id=user_id,
+            followers_count=followers,
+            avg_likes=avg_likes,
+            latest_post_at=latest_taken_at,
+            posts_count=len(raw_posts),
+            clips_count=len(raw_clips),
         )
         return
+
+    if likes_hidden:
+        logger.info(f"[pre_filter] @{username}: лайки скрыты, пропускаем фильтр по engagement")
 
     # Профиль прошёл фильтр — создаём person + blog
     person_id: str | None = None
@@ -271,11 +310,7 @@ async def handle_pre_filter(
         full_name = user.get("full_name") or username
         platform_id = str(user.get("pk", ""))
 
-        person_result = await _h.run_in_thread(
-            db.table("persons")
-            .insert({"full_name": full_name})
-            .execute
-        )
+        person_result = await _h.run_in_thread(db.table("persons").insert({"full_name": full_name}).execute)
         person_id = _extract_inserted_id(person_result.data)
         if person_id is None:
             raise ValueError("Invalid persons insert response: missing id")
@@ -290,19 +325,16 @@ async def handle_pre_filter(
             "scrape_status": "pending",
         }
 
-        blog_result = await _h.run_in_thread(
-            db.table("blogs")
-            .insert(blog_insert_data)
-            .execute
-        )
+        blog_result = await _h.run_in_thread(db.table("blogs").insert(blog_insert_data).execute)
         blog_id = _extract_inserted_id(blog_result.data)
         if blog_id is None:
             raise ValueError("Invalid blogs insert response: missing id")
     except Exception as e:
         if person_id:
             await _h.cleanup_orphan_person(db, person_id)
-        await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
-                                  _h.sanitize_error(str(e)), retry=True)
+        await _h.mark_task_failed(
+            db, task_id, current_attempts, task["max_attempts"], _h.sanitize_error(str(e)), retry=True
+        )
         return
 
     await _h.mark_task_done(db, task_id)

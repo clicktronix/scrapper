@@ -15,6 +15,18 @@ from src.models.db_types import TaskListResultWithError
 from src.platforms.instagram.client import AccountPool
 
 
+def _is_unique_violation(error: PostgrestAPIError) -> bool:
+    """Return True when PostgREST error indicates unique constraint conflict."""
+    code = getattr(error, "code", None)
+    if code == "23505":
+        return True
+
+    if error.args and isinstance(error.args[0], dict):
+        payload = cast(dict[str, Any], error.args[0])
+        return payload.get("code") == "23505"
+    return False
+
+
 async def find_blog_by_username(db: Client, username: str) -> str | None:
     """Найти блог по нормализованному username. Возвращает blog_id или None."""
     blog_result = await run_in_thread(
@@ -75,12 +87,13 @@ async def find_or_create_blog(db: Client, username: str) -> str:
         if not isinstance(blog_id, str):
             raise ValueError("Invalid blogs insert response: missing id")
         return blog_id
-    except PostgrestAPIError:
-        # Race condition: параллельный запрос уже создал блог (unique constraint) — ищем повторно
-        retry_id = await find_blog_by_username(db, normalized_username)
+    except PostgrestAPIError as error:
         await cleanup_orphan_person(db, person_id)
-        if retry_id is not None:
-            return retry_id
+        if _is_unique_violation(error):
+            # Race condition: параллельный запрос уже создал блог — ищем повторно.
+            retry_id = await find_blog_by_username(db, normalized_username)
+            if retry_id is not None:
+                return retry_id
         raise
     except Exception:
         # Любая другая ошибка — чистим orphan person перед пробросом

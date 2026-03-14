@@ -9,12 +9,18 @@ import pytest
 from PIL import Image
 
 from src.ai.images import (
-    DOWNLOAD_TIMEOUT,
     MAX_IMAGES,
     download_image_as_base64,
     resolve_profile_images,
 )
 from src.models.blog import ScrapedPost, ScrapedProfile
+
+
+def _make_valid_image_bytes(fmt: str = "PNG") -> bytes:
+    image = Image.new("RGB", (16, 16), color="blue")
+    buffer = io.BytesIO()
+    image.save(buffer, format=fmt)
+    return buffer.getvalue()
 
 
 class TestDownloadImageAsBase64:
@@ -23,143 +29,90 @@ class TestDownloadImageAsBase64:
     @pytest.mark.asyncio
     async def test_download_success(self) -> None:
         """Успешное скачивание — возвращает data URI."""
-        mock_response = httpx.Response(
-            200,
-            content=b"\x89PNG\r\n\x1a\n",
-            headers={"content-type": "image/png"},
-            request=httpx.Request("GET", "https://example.com/img.png"),
-        )
         client = AsyncMock(spec=httpx.AsyncClient)
-        client.get = AsyncMock(return_value=mock_response)
-
-        result = await download_image_as_base64("https://example.com/img.png", client)
+        with patch("src.ai.images._do_download", new_callable=AsyncMock) as mock_dl:
+            mock_dl.return_value = (
+                _make_valid_image_bytes("PNG"),
+                "image/png",
+                "https://example.com/img.png",
+            )
+            result = await download_image_as_base64("https://example.com/img.png", client)
 
         assert result is not None
-        assert result.startswith("data:image/png;base64,")
-        client.get.assert_called_once_with(
-            "https://example.com/img.png", timeout=DOWNLOAD_TIMEOUT,
-        )
+        assert result.startswith("data:image/")
 
     @pytest.mark.asyncio
     async def test_download_jpeg_default(self) -> None:
         """Content-Type image/jpeg — корректный MIME."""
-        mock_response = httpx.Response(
-            200,
-            content=b"\xff\xd8\xff\xe0",
-            headers={"content-type": "image/jpeg"},
-            request=httpx.Request("GET", "https://example.com/img.jpg"),
-        )
         client = AsyncMock(spec=httpx.AsyncClient)
-        client.get = AsyncMock(return_value=mock_response)
-
-        result = await download_image_as_base64("https://example.com/img.jpg", client)
+        with patch("src.ai.images._do_download", new_callable=AsyncMock) as mock_dl:
+            mock_dl.return_value = (
+                _make_valid_image_bytes("JPEG"),
+                "image/jpeg",
+                "https://example.com/img.jpg",
+            )
+            result = await download_image_as_base64("https://example.com/img.jpg", client)
 
         assert result is not None
         assert result.startswith("data:image/jpeg;base64,")
 
     @pytest.mark.asyncio
-    async def test_content_type_with_charset(self) -> None:
-        """Content-Type с charset — параметры отсекаются."""
-        mock_response = httpx.Response(
-            200,
-            content=b"imagedata",
-            headers={"content-type": "image/webp; charset=utf-8"},
-            request=httpx.Request("GET", "https://example.com/img.webp"),
-        )
+    async def test_unsupported_mime_returns_none(self) -> None:
+        """Неподдерживаемый MIME отклоняется."""
         client = AsyncMock(spec=httpx.AsyncClient)
-        client.get = AsyncMock(return_value=mock_response)
-
-        result = await download_image_as_base64("https://example.com/img.webp", client)
-
-        assert result is not None
-        assert result.startswith("data:image/webp;base64,")
-
-    @pytest.mark.asyncio
-    async def test_non_image_content_type_fallback(self) -> None:
-        """Не-image Content-Type → fallback на image/jpeg."""
-        mock_response = httpx.Response(
-            200,
-            content=b"imagedata",
-            headers={"content-type": "application/octet-stream"},
-            request=httpx.Request("GET", "https://example.com/img"),
-        )
-        client = AsyncMock(spec=httpx.AsyncClient)
-        client.get = AsyncMock(return_value=mock_response)
-
-        result = await download_image_as_base64("https://example.com/img", client)
-
-        assert result is not None
-        assert result.startswith("data:image/jpeg;base64,")
+        with patch("src.ai.images._do_download", new_callable=AsyncMock) as mock_dl:
+            mock_dl.side_effect = ValueError("Unsupported content type")
+            result = await download_image_as_base64("https://example.com/img", client)
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_download_timeout(self) -> None:
         """Таймаут после всех ретраев — возвращает None."""
         client = AsyncMock(spec=httpx.AsyncClient)
-        client.get = AsyncMock(side_effect=httpx.ReadTimeout("timeout"))
-
-        result = await download_image_as_base64("https://example.com/slow.jpg", client)
-
-        assert result is None
-        # 1 начальная попытка + MAX_RETRIES ретраев
-        from src.ai.images import MAX_RETRIES
-        assert client.get.call_count == MAX_RETRIES + 1
+        with patch("src.ai.images._do_download", new_callable=AsyncMock) as mock_dl:
+            mock_dl.side_effect = httpx.ReadTimeout("timeout")
+            result = await download_image_as_base64("https://example.com/slow.jpg", client)
+            assert result is None
+            from src.ai.images import MAX_RETRIES
+            assert mock_dl.await_count == MAX_RETRIES + 1
 
     @pytest.mark.asyncio
     async def test_download_timeout_retry_success(self) -> None:
         """Таймаут на первой попытке, успех на второй — возвращает data URI."""
-        mock_response = httpx.Response(
-            200,
-            content=b"\x89PNG\r\n\x1a\n",
-            headers={"content-type": "image/png"},
-            request=httpx.Request("GET", "https://example.com/img.png"),
-        )
         client = AsyncMock(spec=httpx.AsyncClient)
-        client.get = AsyncMock(
-            side_effect=[httpx.ReadTimeout("timeout"), mock_response],
-        )
-
-        result = await download_image_as_base64("https://example.com/img.png", client)
+        with patch("src.ai.images._do_download", new_callable=AsyncMock) as mock_dl:
+            mock_dl.side_effect = [
+                httpx.ReadTimeout("timeout"),
+                (
+                    _make_valid_image_bytes("PNG"),
+                    "image/png",
+                    "https://example.com/img.png",
+                ),
+            ]
+            result = await download_image_as_base64("https://example.com/img.png", client)
 
         assert result is not None
         assert result.startswith("data:image/")
-        assert client.get.call_count == 2
+        assert mock_dl.await_count == 2
 
     @pytest.mark.asyncio
-    async def test_download_http_404(self) -> None:
-        """HTTP 404 — возвращает None."""
-        mock_response = httpx.Response(
-            404,
-            request=httpx.Request("GET", "https://example.com/gone.jpg"),
-        )
+    async def test_redirect_to_unsafe_url_returns_none(self) -> None:
+        """Небезопасный финальный URL после редиректа отклоняется."""
         client = AsyncMock(spec=httpx.AsyncClient)
-        client.get = AsyncMock(return_value=mock_response)
-
-        result = await download_image_as_base64("https://example.com/gone.jpg", client)
-
+        with patch("src.ai.images._do_download", new_callable=AsyncMock) as mock_dl:
+            mock_dl.return_value = (b"\x89PNG\r\n\x1a\n", "image/png", "http://127.0.0.1/internal.png")
+            result = await download_image_as_base64("https://example.com/img.png", client)
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_download_http_500(self) -> None:
-        """HTTP 500 — возвращает None."""
-        mock_response = httpx.Response(
-            500,
-            request=httpx.Request("GET", "https://example.com/error.jpg"),
-        )
+    async def test_download_too_large_returns_none(self) -> None:
+        """Слишком большое изображение отклоняется."""
+        from src.ai.images import _ImageTooLargeError
+
         client = AsyncMock(spec=httpx.AsyncClient)
-        client.get = AsyncMock(return_value=mock_response)
-
-        result = await download_image_as_base64("https://example.com/error.jpg", client)
-
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_download_connection_error(self) -> None:
-        """Ошибка соединения — возвращает None."""
-        client = AsyncMock(spec=httpx.AsyncClient)
-        client.get = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
-
-        result = await download_image_as_base64("https://example.com/img.jpg", client)
-
+        with patch("src.ai.images._do_download", new_callable=AsyncMock) as mock_dl:
+            mock_dl.side_effect = _ImageTooLargeError("Downloaded=99999999")
+            result = await download_image_as_base64("https://example.com/img.jpg", client)
         assert result is None
 
     @pytest.mark.asyncio
@@ -170,16 +123,10 @@ class TestDownloadImageAsBase64:
         image.save(buffer, format="JPEG", quality=95)
         large_jpeg = buffer.getvalue()
 
-        mock_response = httpx.Response(
-            200,
-            content=large_jpeg,
-            headers={"content-type": "image/jpeg"},
-            request=httpx.Request("GET", "https://example.com/large.jpg"),
-        )
         client = AsyncMock(spec=httpx.AsyncClient)
-        client.get = AsyncMock(return_value=mock_response)
-
-        result = await download_image_as_base64("https://example.com/large.jpg", client)
+        with patch("src.ai.images._do_download", new_callable=AsyncMock) as mock_dl:
+            mock_dl.return_value = (large_jpeg, "image/jpeg", "https://example.com/large.jpg")
+            result = await download_image_as_base64("https://example.com/large.jpg", client)
 
         assert result is not None
         assert result.startswith("data:image/jpeg;base64,")

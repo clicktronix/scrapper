@@ -20,6 +20,7 @@ from instagrapi.exceptions import (
     UserNotFound,
 )
 from loguru import logger
+from pydantic import SecretStr
 from supabase import Client as SupabaseClient
 
 from src.config import Settings
@@ -115,8 +116,8 @@ class AccountState:
     client: Client
     proxy: str
     username: str = ""
-    password: str = ""
-    totp_seed: str = ""
+    password: SecretStr = field(default_factory=lambda: SecretStr(""))
+    totp_seed: SecretStr = field(default_factory=lambda: SecretStr(""))
     is_available: bool = True
     cooldown_until: float = 0
     requests_this_hour: int = 0
@@ -153,15 +154,24 @@ class AccountPool:
         self._lock = asyncio.Lock()
 
     @staticmethod
+    def _unwrap_secret(value: SecretStr | str) -> str:
+        """Return plain string value from SecretStr or str."""
+        if isinstance(value, SecretStr):
+            return value.get_secret_value()
+        return value
+
+    @staticmethod
     def _login_with_totp(
-        cl: Client, username: str, password: str, totp_seed: str,
+        cl: Client, username: str, password: SecretStr | str, totp_seed: SecretStr | str,
     ) -> None:
         """Логин с опциональным TOTP-кодом для 2FA."""
-        if totp_seed:
-            code = cl.totp_generate_code(totp_seed)
-            cl.login(username, password, verification_code=code)
+        password_value = AccountPool._unwrap_secret(password)
+        totp_seed_value = AccountPool._unwrap_secret(totp_seed)
+        if totp_seed_value:
+            code = cl.totp_generate_code(totp_seed_value)
+            cl.login(username, password_value, verification_code=code)
         else:
-            cl.login(username, password)
+            cl.login(username, password_value)
 
     @classmethod
     async def create(cls, db: SupabaseClient, settings: Settings) -> "AccountPool":
@@ -173,7 +183,7 @@ class AccountPool:
         for cred in credentials:
             logger.debug(f"Account {cred.name}: credentials loaded, "
                          f"proxy={'set' if cred.proxy else 'MISSING'}, "
-                         f"totp={'set' if cred.totp_seed else 'no'}")
+                         f"totp={'set' if cred.has_totp_seed else 'no'}")
 
             try:
                 cl = Client()

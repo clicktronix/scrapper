@@ -59,7 +59,10 @@ async def handle_discover(
         return
 
     # Батчевая проверка существующих блогов (вместо N отдельных запросов)
-    normalized_usernames = [_normalize_username(p.username) for p in discovered]
+    # Deduplicate usernames to keep the IN query small and deterministic.
+    normalized_usernames = list(
+        dict.fromkeys(_normalize_username(profile.username) for profile in discovered)
+    )
     existing_blogs_result = await _h.run_in_thread(
         db.table("blogs")
         .select("id, username, scraped_at")
@@ -136,6 +139,9 @@ async def handle_discover(
             blog_id = blog_id_raw
 
             await _h.create_task_if_not_exists(db, blog_id, "full_scrape", priority=5)
+            # Предотвращаем дубли, если тот же username встречается несколько раз
+            # в discovered-списке в рамках одного прогона.
+            existing_blogs_by_username[normalized_username] = {"id": blog_id}
             new_count += 1
         except Exception as e:
             if person_id:

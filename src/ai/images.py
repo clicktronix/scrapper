@@ -33,16 +33,26 @@ MAX_IMAGE_DIMENSION = 512
 
 # Целевой верхний предел размера после оптимизации (400 КБ)
 MAX_OPTIMIZED_IMAGE_SIZE = 400 * 1024
+_ALLOWED_IMAGE_MIMES = frozenset({
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+})
 
 
-def _optimize_image_for_llm(raw_image: bytes, original_mime: str, source_url: str) -> tuple[bytes, str]:
+class _ImageTooLargeError(Exception):
+    """Raised when downloaded image exceeds hard byte limit."""
+
+
+def _optimize_image_for_llm(raw_image: bytes, source_url: str) -> tuple[bytes, str] | None:
     """Сжать/уменьшить изображение для более компактного base64 payload."""
     try:
         image = Image.open(io.BytesIO(raw_image))
         image.load()
     except Exception as e:
-        logger.warning(f"[images] Не удалось декодировать изображение, используем оригинал: {source_url} ({e})")
-        return raw_image, original_mime
+        logger.warning(f"[images] Не удалось декодировать изображение, пропускаем: {source_url} ({e})")
+        return None
 
     image.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION), Image.Resampling.LANCZOS)
 
@@ -77,16 +87,40 @@ async def _do_download(
     url: str,
     client: httpx.AsyncClient,
     semaphore: asyncio.Semaphore | None = None,
-) -> httpx.Response:
-    """Выполнить HTTP GET с учётом семафора."""
+) -> tuple[bytes, str, str]:
+    """Скачать изображение с лимитом размера и вернуть (bytes, mime, final_url)."""
+    async def _download() -> tuple[bytes, str, str]:
+        async with client.stream(
+            "GET",
+            url,
+            timeout=DOWNLOAD_TIMEOUT,
+            follow_redirects=True,
+        ) as response:
+            response.raise_for_status()
+
+            final_url = str(response.url)
+            content_type = response.headers.get("content-type", "").split(";", maxsplit=1)[0].strip().lower()
+            if content_type not in _ALLOWED_IMAGE_MIMES:
+                raise ValueError(f"Unsupported content type: {content_type or 'unknown'}")
+
+            content_length = response.headers.get("content-length")
+            if content_length and content_length.isdigit() and int(content_length) > MAX_IMAGE_SIZE:
+                raise _ImageTooLargeError(f"Content-Length={content_length}")
+
+            chunks: list[bytes] = []
+            downloaded = 0
+            async for chunk in response.aiter_bytes():
+                downloaded += len(chunk)
+                if downloaded > MAX_IMAGE_SIZE:
+                    raise _ImageTooLargeError(f"Downloaded={downloaded}")
+                chunks.append(chunk)
+
+            return b"".join(chunks), content_type, final_url
+
     if semaphore is not None:
         async with semaphore:
-            response = await client.get(url, timeout=DOWNLOAD_TIMEOUT)
-            response.raise_for_status()
-            return response
-    response = await client.get(url, timeout=DOWNLOAD_TIMEOUT)
-    response.raise_for_status()
-    return response
+            return await _download()
+    return await _download()
 
 
 async def download_image_as_base64(
@@ -99,11 +133,19 @@ async def download_image_as_base64(
         logger.warning(f"[images] Небезопасный URL, пропускаем: {url}")
         return None
 
-    response: httpx.Response | None = None
+    downloaded_bytes: bytes | None = None
+    mime: str | None = None
+    final_url: str | None = None
     for attempt in range(MAX_RETRIES + 1):
         try:
-            response = await _do_download(url, client, semaphore)
+            downloaded_bytes, mime, final_url = await _do_download(url, client, semaphore)
             break
+        except _ImageTooLargeError as e:
+            logger.warning(f"[images] Слишком большое изображение ({e}): {url}")
+            return None
+        except ValueError as e:
+            logger.warning(f"[images] Неподдерживаемый тип контента: {url} ({e})")
+            return None
         except httpx.TimeoutException:
             if attempt < MAX_RETRIES:
                 delay = RETRY_BASE_DELAY * (attempt + 1)
@@ -126,25 +168,17 @@ async def download_image_as_base64(
             logger.warning(f"[images] Ошибка при скачивании {url}: {e}")
             return None
 
-    if response is None:
+    if downloaded_bytes is None or mime is None or final_url is None:
         return None
 
-    # Проверяем размер
-    if len(response.content) > MAX_IMAGE_SIZE:
-        logger.warning(
-            f"[images] Слишком большое изображение "
-            f"({len(response.content)} байт): {url}"
-        )
+    if not is_safe_url(final_url):
+        logger.warning(f"[images] Небезопасный redirect URL, пропускаем: {final_url}")
         return None
 
-    # Определяем MIME-тип из Content-Type (fallback: image/jpeg)
-    content_type = response.headers.get("content-type", "image/jpeg")
-    # Убираем параметры типа charset
-    mime = content_type.split(";")[0].strip()
-    if not mime.startswith("image/"):
-        mime = "image/jpeg"
-
-    optimized_bytes, optimized_mime = _optimize_image_for_llm(response.content, mime, url)
+    optimized = _optimize_image_for_llm(downloaded_bytes, url)
+    if optimized is None:
+        return None
+    optimized_bytes, optimized_mime = optimized
 
     encoded = base64.b64encode(optimized_bytes).decode("ascii")
     return f"data:{optimized_mime};base64,{encoded}"

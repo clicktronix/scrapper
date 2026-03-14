@@ -20,8 +20,26 @@ _ALLOWED_IMAGE_MIMES = frozenset({
 })
 
 
+def _is_safe_storage_path(path: str) -> bool:
+    """Validate relative storage path to prevent traversal."""
+    if not path or path.startswith("/"):
+        return False
+    if any(part == ".." for part in path.split("/")):
+        return False
+    return "//" not in path
+
+
+def _is_safe_storage_filename(name: str) -> bool:
+    """Validate single filename returned by storage listing."""
+    if not name or name.startswith("."):
+        return False
+    return not ("/" in name or "\\" in name or ".." in name)
+
+
 def build_public_url(supabase_url: str, path: str) -> str:
     """Постоянный публичный URL для файла в Storage."""
+    if not _is_safe_storage_path(path):
+        raise ValueError(f"Unsafe storage path: {path}")
     base = supabase_url.rstrip("/")
     return f"{base}/storage/v1/object/public/{IMAGES_BUCKET}/{path}"
 
@@ -43,6 +61,11 @@ async def download_image(url: str, client: httpx.AsyncClient) -> tuple[bytes, st
         return None
     except httpx.HTTPError as e:
         logger.warning(f"[image_storage] Ошибка скачивания {url}: {e}")
+        return None
+
+    final_url = str(response.url)
+    if not is_safe_url(final_url):
+        logger.warning(f"[image_storage] Небезопасный redirect URL, пропускаем: {final_url}")
         return None
 
     # Ранняя проверка Content-Length (если сервер сообщает размер)
@@ -192,6 +215,10 @@ async def persist_profile_images(
 
 async def delete_blog_images(db: Client, blog_id: str) -> int:
     """Удалить изображения постов блога из Storage (аватар сохраняется). Вернуть количество удалённых."""
+    if not _is_safe_storage_filename(blog_id):
+        logger.warning(f"[image_storage] Пропускаем небезопасный blog_id: {blog_id}")
+        return 0
+
     try:
         files = await run_in_thread(
             db.storage.from_(IMAGES_BUCKET).list, blog_id
@@ -204,7 +231,17 @@ async def delete_blog_images(db: Client, blog_id: str) -> int:
         return 0
 
     # Аватар сохраняем — удаляем только посты
-    post_paths = [f"{blog_id}/{f['name']}" for f in files if f["name"] != "avatar.jpg"]
+    post_paths: list[str] = []
+    for raw_file in files:
+        if not isinstance(raw_file, dict):
+            continue
+        name = raw_file.get("name")
+        if not isinstance(name, str) or name == "avatar.jpg":
+            continue
+        if not _is_safe_storage_filename(name):
+            logger.warning(f"[image_storage] Пропускаем небезопасное имя файла: {name}")
+            continue
+        post_paths.append(f"{blog_id}/{name}")
     if not post_paths:
         return 0
 

@@ -366,7 +366,7 @@ class TestSanitizeError:
         error = "UserNotFound: user does not exist"
         assert sanitize_error(error) == error
 
-    def testsanitize_error_in_mark_task_failed(self) -> None:
+    def test_sanitize_error_in_mark_task_failed(self) -> None:
         """mark_task_failed должен санитизировать ошибку перед сохранением."""
         # Проверяем через мок, что в БД попадает очищенная ошибка
         from src.database import sanitize_error
@@ -618,7 +618,7 @@ class TestRecoverStuckTasks:
 
         update_args = db.table.return_value.update.call_args[0][0]
         assert update_args["status"] == "pending"
-        assert "120min" in update_args["error_message"]
+        assert "1440min" in update_args["error_message"]
 
     async def test_ai_analysis_exhausted_sets_failed(self) -> None:
         """ai_analysis задача с исчерпанными попытками → failed."""
@@ -638,7 +638,7 @@ class TestRecoverStuckTasks:
 
         update_args = db.table.return_value.update.call_args[0][0]
         assert update_args["status"] == "failed"
-        assert "120min" in update_args["error_message"]
+        assert "1440min" in update_args["error_message"]
 
 
 class TestFetchPendingTasks:

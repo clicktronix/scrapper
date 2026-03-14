@@ -1,5 +1,5 @@
 """Конфигурация скрапера из переменных окружения."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 
@@ -21,9 +21,14 @@ class AccountCredentials:
 
     name: str
     username: str
-    password: str
+    password: SecretStr
     proxy: str
-    totp_seed: str = ""
+    totp_seed: SecretStr = field(default_factory=lambda: SecretStr(""))
+
+    @property
+    def has_totp_seed(self) -> bool:
+        """Есть ли TOTP seed у аккаунта."""
+        return bool(self.totp_seed.get_secret_value().strip())
 
     def __repr__(self) -> str:
         return f"AccountCredentials(name={self.name!r}, username={self.username!r}, password='***', totp_seed='***')"
@@ -52,8 +57,8 @@ def _parse_account_credentials(env_file: str = ".env") -> list[AccountCredential
         totp_seed = env.get(f"IG_{upper}_TOTP_SEED", "") or ""
         if username and password:
             result.append(AccountCredentials(
-                name=name, username=username, password=password,
-                proxy=proxy, totp_seed=totp_seed,
+                name=name, username=username, password=SecretStr(password),
+                proxy=proxy, totp_seed=SecretStr(totp_seed),
             ))
 
     return result
@@ -110,6 +115,11 @@ class Settings(BaseSettings):
         default=8001,
         validation_alias=AliasChoices("SCRAPER_PORT", "PORT"),
     )
+    rate_limit_max_requests: int = 60
+    rate_limit_window_seconds: int = 60
+    rate_limit_trust_forwarded_for: bool = False
+    trusted_proxy_ips: str = ""
+    api_docs_enabled: bool = False
 
     # Фильтрация свежести
     rescrape_days: int = 60  # Минимальный интервал между скрапами (дни)
@@ -129,6 +139,11 @@ class Settings(BaseSettings):
     def account_credentials(self) -> list[AccountCredentials]:
         """Креды всех Instagram-аккаунтов из .env файла."""
         return _parse_account_credentials()
+
+    @cached_property
+    def trusted_proxy_ip_list(self) -> list[str]:
+        """Список доверенных proxy IP из trusted_proxy_ips."""
+        return _split_comma(self.trusted_proxy_ips)
 
 
 def load_settings() -> Settings:

@@ -140,8 +140,12 @@ class TestRetryTask:
     def test_retry_failed_task(self) -> None:
         app = make_app()
         with patch("src.api.app.run_in_thread") as mock_run:
-            # Первый вызов — select задачи
-            mock_run.return_value = MagicMock(data=[{"id": TASK_UUID, "status": "failed"}])
+            # select failed -> update -> reselect pending
+            mock_run.side_effect = [
+                MagicMock(data=[{"id": TASK_UUID, "status": "failed"}]),
+                MagicMock(data=[]),
+                MagicMock(data=[{"status": "pending"}]),
+            ]
             client = TestClient(app)
             resp = client.post(f"/api/tasks/{TASK_UUID}/retry", headers=AUTH_HEADERS)
 
@@ -158,6 +162,19 @@ class TestRetryTask:
             resp = client.post(f"/api/tasks/{TASK_UUID}/retry", headers=AUTH_HEADERS)
 
         assert resp.status_code == 404
+
+    def test_retry_state_changed_concurrently_returns_409(self) -> None:
+        app = make_app()
+        with patch("src.api.app.run_in_thread") as mock_run:
+            # Изначально failed, но после update статус не стал pending.
+            mock_run.side_effect = [
+                MagicMock(data=[{"id": TASK_UUID, "status": "failed"}]),
+                MagicMock(data=[]),
+                MagicMock(data=[{"status": "running"}]),
+            ]
+            client = TestClient(app)
+            resp = client.post(f"/api/tasks/{TASK_UUID}/retry", headers=AUTH_HEADERS)
+        assert resp.status_code == 409
 
     def test_retry_pending_task_returns_409(self) -> None:
         app = make_app()

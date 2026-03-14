@@ -1,7 +1,10 @@
 """Тесты конфигурации скрапера."""
-import pytest
+from pathlib import Path
 
-from src.config import _split_comma
+import pytest
+from pydantic import SecretStr
+
+from src.config import _parse_account_credentials, _split_comma
 
 
 class TestSplitComma:
@@ -228,3 +231,63 @@ class TestSettingsApiFields:
 
         s = Settings()
         assert s.scraper_port == 9000
+
+    def test_api_docs_disabled_by_default(self, monkeypatch) -> None:
+        from src.config import Settings
+
+        monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
+        monkeypatch.setenv("SUPABASE_SERVICE_KEY", "key")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("SCRAPER_API_KEY", "sk-scraper-123")
+
+        s = Settings()
+        assert s.api_docs_enabled is False
+
+    def test_trusted_proxy_ip_list_parsing(self, monkeypatch) -> None:
+        from src.config import Settings
+
+        monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
+        monkeypatch.setenv("SUPABASE_SERVICE_KEY", "key")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("SCRAPER_API_KEY", "sk-scraper-123")
+        monkeypatch.setenv("TRUSTED_PROXY_IPS", "10.0.0.1, 10.0.0.2")
+
+        s = Settings()
+        assert s.trusted_proxy_ip_list == ["10.0.0.1", "10.0.0.2"]
+
+
+class TestAccountCredentialsParsing:
+    def test_parse_account_credentials_uses_secret_str(self, tmp_path: Path) -> None:
+        env_path = tmp_path / ".env"
+        env_path.write_text(
+            "\n".join(
+                [
+                    "INSTAGRAM_ACCOUNTS=acc1",
+                    "IG_ACC1_USERNAME=user1",
+                    "IG_ACC1_PASSWORD=pass1",
+                    "IG_ACC1_TOTP_SEED=totp1",
+                    "PROXY_ACC1=http://proxy.local:8080",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        credentials = _parse_account_credentials(str(env_path))
+        assert len(credentials) == 1
+        cred = credentials[0]
+        assert cred.username == "user1"
+        assert isinstance(cred.password, SecretStr)
+        assert cred.password.get_secret_value() == "pass1"
+        assert cred.has_totp_seed is True
+
+    def test_has_totp_seed_false_when_empty(self) -> None:
+        from src.config import AccountCredentials
+
+        cred = AccountCredentials(
+            name="acc1",
+            username="user1",
+            password=SecretStr("pass1"),
+            proxy="",
+            totp_seed=SecretStr(""),
+        )
+        assert cred.has_totp_seed is False

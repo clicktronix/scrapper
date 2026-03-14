@@ -26,6 +26,22 @@ _ENRICHMENT_RETRY_ATTEMPTS = 3
 _ENRICHMENT_RETRY_DELAY_SECONDS = 0.2
 
 
+def _has_successful_ai_insights(value: Any) -> bool:
+    """Return True when ai_insights looks like a successful structured analysis."""
+    if not isinstance(value, dict):
+        return False
+    if value.get("refusal_reason"):
+        return False
+    required_sections = (
+        "blogger_profile",
+        "audience_inference",
+        "content",
+        "commercial",
+        "summary",
+    )
+    return all(section in value for section in required_sections)
+
+
 @dataclass
 class BatchContext:
     """Общий контекст для обработки результатов батча (shared между всеми блогами)."""
@@ -412,7 +428,14 @@ async def _process_blog_result(
         refusal_reason = insights[1]
         logger.warning(f"[batch_results] Blog {blog_id}: AI refusal: {refusal_reason}")
 
-        current_status = current_by_id.get(blog_id, {}).get("scrape_status")
+        current_blog = current_by_id.get(blog_id, {})
+        current_status = current_blog.get("scrape_status")
+        if _has_successful_ai_insights(current_blog.get("ai_insights")):
+            logger.info(
+                f"[batch_results] Blog {blog_id}: refusal ignored, "
+                "successful insights already stored"
+            )
+            return
         already_refused = current_status == "ai_refused"
 
         await _h.run_in_thread(
@@ -589,7 +612,7 @@ async def handle_batch_results(
         current_blogs = await _h.run_in_thread(
             db.table("blogs").select(
                 "id, city, content_language, audience_gender,"
-                " audience_age, audience_countries, scrape_status"
+                " audience_age, audience_countries, scrape_status, ai_insights"
             )
             .in_("id", blog_ids_with_results).execute
         )
@@ -645,10 +668,15 @@ async def handle_batch_results(
             # помечаем задачу как failed с retry и продолжаем
             logger.error(f"[batch_results] Blog {blog_id} failed: {e}")
             for task_id, attempts, max_attempts in task_infos:
-                await _h.mark_task_failed(
-                    db, task_id, attempts, max_attempts,
-                    f"Error processing batch result: {e}", retry=True,
-                )
+                try:
+                    await _h.mark_task_failed(
+                        db, task_id, attempts, max_attempts,
+                        f"Error processing batch result: {e}", retry=True,
+                    )
+                except Exception as fail_err:
+                    logger.error(
+                        f"[batch_results] Failed to mark task {task_id} as failed: {fail_err}"
+                    )
             continue
 
         for task_id, _, _ in task_infos:

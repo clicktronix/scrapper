@@ -28,6 +28,7 @@ def _make_message(level_name: str, module: str = "src.worker", text: str = "test
         "level": level_mock,
         "name": module,
         "message": text,
+        "exception": None,
     }
     return message
 
@@ -95,3 +96,19 @@ class TestSupabaseSink:
         sink(_make_message("INFO", "src.worker", "info msg"))
 
         db.table.return_value.insert.assert_not_called()
+
+    def test_sink_appends_sanitized_exception(self) -> None:
+        db = _mock_supabase()
+        sink = create_supabase_sink(db)
+        message = _make_message(
+            "ERROR",
+            "src.worker",
+            "Request failed",
+        )
+        message.record["exception"] = "Authorization: Bearer sk-secret-token"
+
+        sink(message)
+
+        payload = db.table.return_value.insert.call_args[0][0]
+        assert "sk-secret-token" not in payload["message"]
+        assert "Bearer ***" in payload["message"]

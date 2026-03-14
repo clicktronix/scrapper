@@ -40,12 +40,13 @@ def _as_row_dict(value: Any) -> dict[str, Any]:
 
 def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> FastAPI:
     """Создать FastAPI-приложение с зависимостями."""
+    docs_enabled = settings.api_docs_enabled if isinstance(settings.api_docs_enabled, bool) else False
     app = FastAPI(
         title="Scraper API",
         version="0.1.0",
-        docs_url="/docs" if settings.log_level == "DEBUG" else None,
+        docs_url="/docs" if docs_enabled else None,
         redoc_url=None,
-        openapi_url="/openapi.json" if settings.log_level == "DEBUG" else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
     )
 
     @app.exception_handler(Exception)
@@ -58,7 +59,12 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
     app.state.pool = pool
     app.state.settings = settings
 
-    rate_limiter = RateLimiter()
+    rate_limiter = RateLimiter(
+        max_requests=settings.rate_limit_max_requests,
+        window_seconds=settings.rate_limit_window_seconds,
+        trust_forwarded_for=settings.rate_limit_trust_forwarded_for,
+        trusted_proxy_ips=settings.trusted_proxy_ip_list,
+    )
 
     async def check_rate_limit(request: Request) -> None:
         """Делегирует проверку rate limit в RateLimiter."""
@@ -74,7 +80,11 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
         ):
             raise HTTPException(status_code=401, detail="Invalid API key")
 
-    @app.get("/api/health", response_model=HealthResponse)
+    @app.get(
+        "/api/health",
+        response_model=HealthResponse,
+        dependencies=[Depends(check_rate_limit)],
+    )
     async def health(response: Response) -> HealthResponse:
         """Healthcheck — без авторизации."""
         return await get_health_status(db, pool, response)
@@ -260,8 +270,15 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
                 "error_message": None,
                 "next_retry_at": None,
                 "attempts": 0,
-            }).eq("id", tid).execute
+            }).eq("id", tid).eq("status", "failed").execute
         )
+
+        refreshed = await run_in_thread(
+            db.table("scrape_tasks").select("status").eq("id", tid).execute
+        )
+        refreshed_task = _as_row_dict(refreshed.data[0]) if refreshed.data else {}
+        if refreshed_task.get("status") != "pending":
+            raise HTTPException(status_code=409, detail="Task state changed concurrently")
 
         return {"task_id": tid, "status": "retrying"}
 

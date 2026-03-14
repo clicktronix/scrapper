@@ -80,6 +80,26 @@ class TestFindOrCreateBlog:
                 await find_or_create_blog(db, "broken_user")
 
     @pytest.mark.asyncio
+    async def test_non_unique_postgrest_error_not_treated_as_race(self) -> None:
+        """Не-unique PostgREST ошибка пробрасывается без retry SELECT."""
+        from src.api.services import find_or_create_blog
+
+        db = MagicMock()
+        with patch("src.api.services.run_in_thread", new_callable=AsyncMock) as mock_run:
+            mock_run.side_effect = [
+                MagicMock(data=[]),  # blog не найден
+                MagicMock(data=[{"id": "person-1"}]),  # insert person
+                PostgrestAPIError({
+                    "message": "permission denied", "code": "42501",
+                    "details": "", "hint": "",
+                }),
+            ]
+
+            with pytest.raises(PostgrestAPIError):
+                await find_or_create_blog(db, "broken_permissions")
+            assert mock_run.await_count == 3
+
+    @pytest.mark.asyncio
     async def test_normalizes_username_to_lowercase(self) -> None:
         """Username нормализуется: trim + lstrip('@') + lowercase."""
         from src.api.services import find_or_create_blog

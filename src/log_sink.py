@@ -13,7 +13,13 @@ def create_supabase_sink(db: Client):
         if record["level"].no < 30:  # WARNING = 30
             return
         try:
-            sanitized_msg = sanitize_error(str(record["message"]))
+            base_message = sanitize_error(str(record["message"]))
+            exception = record.get("exception")
+            if exception:
+                safe_exception = sanitize_error(str(exception))
+                sanitized_msg = f"{base_message} | exception={safe_exception}"
+            else:
+                sanitized_msg = base_message
             db.table("scrape_logs").insert({
                 "level": record["level"].name,
                 "module": record["name"],

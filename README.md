@@ -36,7 +36,8 @@
                     │  │         Task Handlers            │ │
                     │  │                                  │ │
                     │  │  full_scrape  │  ai_analysis     │ │
-                    │  │  discover     │  batch_results   │ │
+                    │  │  pre_filter   │  batch_results   │ │
+                    │  │  discover     │                  │ │
                     │  └───────┬──────────────┬──────────┘ │
                     └──────────│──────────────│────────────┘
                                │              │
@@ -85,7 +86,7 @@ docker compose logs -f scraper
 ### Тесты
 
 ```bash
-uv run pytest tests/ -v          # Все тесты (840+)
+uv run pytest tests/ -v          # Все тесты (961+)
 uv run pytest tests/ -v -x       # Остановиться на первом падении
 uv run pytest tests/test_ai/ -v  # Только AI-модуль
 uv run pytest tests/test_api/ -v # Только API-модуль

@@ -56,6 +56,14 @@ class TestLoadSession:
         await load_session(db, "my_account")
         db.storage.from_.return_value.download.assert_called_with("my_account.json")
 
+    async def test_rejects_unsafe_account_name(self) -> None:
+        from src.storage import load_session
+
+        db = MagicMock()
+        result = await load_session(db, "../evil")
+        assert result is None
+        db.storage.from_.return_value.download.assert_not_called()
+
 
 class TestLoadSessionNonDictJson:
     """BUG-11: load_session должен возвращать None для не-dict JSON."""
@@ -167,6 +175,21 @@ class TestSaveSession:
 
         # Не должен бросить исключение
         await save_session(db, "account1", {"session": "data"})
+
+    async def test_save_rejects_unsafe_account_name(self) -> None:
+        from src.storage import save_session
+
+        db = MagicMock()
+        await save_session(db, "../evil", {"session": "data"})
+        db.storage.from_.return_value.upload.assert_not_called()
+
+    async def test_save_skips_oversized_payload(self) -> None:
+        from src.storage import MAX_SESSION_SIZE_BYTES, save_session
+
+        db = MagicMock()
+        huge_value = "x" * (MAX_SESSION_SIZE_BYTES + 1024)
+        await save_session(db, "account1", {"payload": huge_value})
+        db.storage.from_.return_value.upload.assert_not_called()
 
     async def test_save_non_serializable_doesnt_raise(self) -> None:
         """Несериализуемые данные (set, datetime) не роняют save_session."""

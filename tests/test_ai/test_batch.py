@@ -947,10 +947,10 @@ class TestMatchCategories:
 
         stats = await match_categories(mock_db, "blog-1", insights)
 
-        # delete старых + insert новых: 3 записи (1 primary + 2 secondary)
-        assert mock_db.table.return_value.delete.call_count == 1
-        assert mock_db.table.return_value.insert.call_count == 1
-        rows = mock_db.table.return_value.insert.call_args[0][0]
+        # Атомарная замена через RPC: 3 записи (1 primary + 2 secondary)
+        assert mock_db.rpc.call_count == 1
+        assert mock_db.rpc.call_args[0][0] == "set_blog_categories_for_scraper"
+        rows = mock_db.rpc.call_args[0][1]["p_categories"]
         assert len(rows) == 3
         assert stats == {"total": 3, "matched": 3, "unmatched": 0}
 
@@ -986,8 +986,8 @@ class TestMatchCategories:
 
         await match_categories(mock_db, "blog-1", insights)
 
-        # insert не должен вызываться — нет совпадений
-        mock_db.table.return_value.insert.assert_not_called()
+        # RPC не должен вызываться — нет совпадений
+        mock_db.rpc.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_secondary_topics(self) -> None:
@@ -1007,10 +1007,9 @@ class TestMatchCategories:
 
         await match_categories(mock_db, "blog-1", insights)
 
-        # delete старых категорий + insert новых
-        assert mock_db.table.return_value.delete.call_count == 1
-        assert mock_db.table.return_value.insert.call_count == 1
-        rows = mock_db.table.return_value.insert.call_args[0][0]
+        # Атомарная замена через RPC
+        assert mock_db.rpc.call_count == 1
+        rows = mock_db.rpc.call_args[0][1]["p_categories"]
         assert len(rows) == 1
         assert rows[0]["is_primary"] is True
 
@@ -1035,8 +1034,8 @@ class TestMatchCategories:
 
         # "BEAUTY".lower() == "beauty" (code) → совпадение
         # "Макияж".lower() == "макияж" (name_lower) → совпадение
-        assert mock_db.table.return_value.insert.call_count == 1
-        rows = mock_db.table.return_value.insert.call_args[0][0]
+        assert mock_db.rpc.call_count == 1
+        rows = mock_db.rpc.call_args[0][1]["p_categories"]
         assert len(rows) == 2
 
     @pytest.mark.asyncio
@@ -1058,9 +1057,9 @@ class TestMatchCategories:
 
         await match_categories(mock_db, "blog-1", insights)
 
-        # delete + insert: 1 вызов каждый, 2 записи
-        assert mock_db.table.return_value.insert.call_count == 1
-        rows = mock_db.table.return_value.insert.call_args[0][0]
+        # RPC с 2 категориями
+        assert mock_db.rpc.call_count == 1
+        rows = mock_db.rpc.call_args[0][1]["p_categories"]
         assert len(rows) == 2
         # Первый — primary (is_primary=True)
         assert rows[0]["is_primary"] is True
@@ -1089,9 +1088,9 @@ class TestMatchCategories:
 
         await match_categories(mock_db, "blog-1", insights)
 
-        # delete + insert: 2 записи (beauty дубль пропущен)
-        assert mock_db.table.return_value.insert.call_count == 1
-        rows = mock_db.table.return_value.insert.call_args[0][0]
+        # RPC: 2 записи (beauty дубль пропущен)
+        assert mock_db.rpc.call_count == 1
+        rows = mock_db.rpc.call_args[0][1]["p_categories"]
         assert len(rows) == 2
 
         # Проверяем, что "beauty" (cat-1) записана как is_primary=True
@@ -1122,9 +1121,9 @@ class TestMatchCategories:
 
         await match_categories(mock_db, "blog-1", insights, categories=categories)
 
-        # delete + insert: 2 записи
-        assert mock_db.table.return_value.insert.call_count == 1
-        rows = mock_db.table.return_value.insert.call_args[0][0]
+        # RPC: 2 записи
+        assert mock_db.rpc.call_count == 1
+        rows = mock_db.rpc.call_args[0][1]["p_categories"]
         assert len(rows) == 2
         # Первый — primary
         assert rows[0]["category_id"] == "cat-1"
@@ -1156,8 +1155,8 @@ class TestMatchCategoriesEdge:
 
         await match_categories(mock_db, "blog-1", insights)
 
-        # beauty найдена по code, insert вызван один раз
-        assert mock_db.table.return_value.insert.call_count == 1
+        # beauty найдена по code, RPC вызван один раз
+        assert mock_db.rpc.call_count == 1
 
     @pytest.mark.asyncio
     async def test_empty_categories_list(self) -> None:
@@ -1188,7 +1187,7 @@ class TestMatchCategoriesEdge:
 
         await match_categories(mock_db, "blog-1", insights)
 
-        mock_db.table.return_value.insert.assert_not_called()
+        mock_db.rpc.assert_not_called()
 
 
 class TestMatchTags:
@@ -1213,10 +1212,10 @@ class TestMatchTags:
 
         stats = await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
-        # delete старых + insert новых: 3 записи
-        assert mock_db.table.return_value.delete.call_count == 1
-        assert mock_db.table.return_value.insert.call_count == 1
-        rows = mock_db.table.return_value.insert.call_args[0][0]
+        # Атомарная замена через RPC: 3 записи
+        assert mock_db.rpc.call_count == 1
+        assert mock_db.rpc.call_args[0][0] == "set_blog_tags_for_scraper"
+        rows = mock_db.rpc.call_args[0][1]["p_tags"]
         assert len(rows) == 3
         assert stats == {"total": 3, "matched": 3, "unmatched": 0}
 
@@ -1234,9 +1233,8 @@ class TestMatchTags:
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
-        # Только 1 известный тег → delete + insert
-        assert mock_db.table.return_value.delete.call_count == 1
-        assert mock_db.table.return_value.insert.call_count == 1
+        # Только 1 известный тег → RPC
+        assert mock_db.rpc.call_count == 1
 
     @pytest.mark.asyncio
     async def test_empty_tags(self) -> None:
@@ -1284,9 +1282,8 @@ class TestMatchTags:
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
-        # delete + insert
-        assert mock_db.table.return_value.delete.call_count == 1
-        assert mock_db.table.return_value.insert.call_count == 1
+        # RPC вызван
+        assert mock_db.rpc.call_count == 1
 
 
 class TestParseResultLineLogging:
@@ -1508,8 +1505,8 @@ class TestMatchCategoriesFuzzy:
 
         await match_categories(mock_db, "blog-1", insights, categories=categories)
 
-        assert mock_db.table.return_value.insert.call_count == 1
-        rows = mock_db.table.return_value.insert.call_args[0][0]
+        assert mock_db.rpc.call_count == 1
+        rows = mock_db.rpc.call_args[0][1]["p_categories"]
         assert rows[0]["category_id"] == "cat-1"
 
     @pytest.mark.asyncio
@@ -1524,7 +1521,7 @@ class TestMatchCategoriesFuzzy:
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
-        assert mock_db.table.return_value.insert.call_count == 1
+        assert mock_db.rpc.call_count == 1
 
 
 class TestMatchTagsENtoRU:
@@ -1543,8 +1540,8 @@ class TestMatchTagsENtoRU:
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
-        assert mock_db.table.return_value.insert.call_count == 1
-        rows = mock_db.table.return_value.insert.call_args[0][0]
+        assert mock_db.rpc.call_count == 1
+        rows = mock_db.rpc.call_args[0][1]["p_tags"]
         assert rows[0]["tag_id"] == "tag-1"
 
     @pytest.mark.asyncio
@@ -1560,7 +1557,7 @@ class TestMatchTagsENtoRU:
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
-        assert mock_db.table.return_value.insert.call_count == 1
+        assert mock_db.rpc.call_count == 1
 
     @pytest.mark.asyncio
     async def test_unknown_en_tag_not_translated(self) -> None:
@@ -1593,8 +1590,8 @@ class TestMatchTagsENtoRU:
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
-        assert mock_db.table.return_value.insert.call_count == 1
-        rows = mock_db.table.return_value.insert.call_args[0][0]
+        assert mock_db.rpc.call_count == 1
+        rows = mock_db.rpc.call_args[0][1]["p_tags"]
         assert rows[0]["tag_id"] == "tag-1"
 
     @pytest.mark.asyncio
@@ -1610,7 +1607,7 @@ class TestMatchTagsENtoRU:
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
-        assert mock_db.table.return_value.insert.call_count == 1
+        assert mock_db.rpc.call_count == 1
 
 
 class TestIsValidCity:

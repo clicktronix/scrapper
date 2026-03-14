@@ -1,7 +1,7 @@
 """Тесты RateLimiter — in-memory rate limiter."""
 import asyncio
 import time
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -65,11 +65,13 @@ class TestRateLimiter:
         request = _make_request()
 
         # Заполняем лимит вручную старыми записями
-        old_time = time.time() - 10
+        base_time = 1_700_000_000.0
+        old_time = base_time - 10
         limiter._store["127.0.0.1"] = [old_time, old_time]
 
-        # Новый запрос проходит — старые записи очищены
-        await limiter.check(request)
+        # Новый запрос проходит — старые записи очищены.
+        with patch("src.api.rate_limiter.time.time", return_value=base_time):
+            await limiter.check(request)
 
     @pytest.mark.asyncio
     async def test_unknown_client_ip(self) -> None:
@@ -84,14 +86,49 @@ class TestRateLimiter:
 
     @pytest.mark.asyncio
     async def test_x_forwarded_for_used(self) -> None:
-        """X-Forwarded-For имеет приоритет над request.client.host."""
-        limiter = RateLimiter(max_requests=2, window_seconds=60)
+        """X-Forwarded-For используется только для доверенного прокси."""
+        limiter = RateLimiter(
+            max_requests=2,
+            window_seconds=60,
+            trust_forwarded_for=True,
+            trusted_proxy_ips=["10.0.0.1"],
+        )
         request = _make_request(ip="10.0.0.1", forwarded_for="192.168.1.100, 10.0.0.1")
 
         await limiter.check(request)
-        # Должен использовать первый IP из X-Forwarded-For
+        # Используется первый IP из X-Forwarded-For.
         assert "192.168.1.100" in limiter._store
         assert "10.0.0.1" not in limiter._store
+
+    @pytest.mark.asyncio
+    async def test_untrusted_proxy_ignores_x_forwarded_for(self) -> None:
+        """X-Forwarded-For игнорируется для недоверенного источника."""
+        limiter = RateLimiter(
+            max_requests=2,
+            window_seconds=60,
+            trust_forwarded_for=True,
+            trusted_proxy_ips=["10.0.0.2"],
+        )
+        request = _make_request(ip="10.0.0.1", forwarded_for="192.168.1.100, 10.0.0.1")
+
+        await limiter.check(request)
+        assert "10.0.0.1" in limiter._store
+        assert "192.168.1.100" not in limiter._store
+
+    @pytest.mark.asyncio
+    async def test_empty_trusted_proxy_list_ignores_forwarded_for(self) -> None:
+        """При trust_forwarded_for=True без trusted proxies XFF не используется."""
+        limiter = RateLimiter(
+            max_requests=2,
+            window_seconds=60,
+            trust_forwarded_for=True,
+            trusted_proxy_ips=[],
+        )
+        request = _make_request(ip="10.0.0.1", forwarded_for="192.168.1.100, 10.0.0.1")
+
+        await limiter.check(request)
+        assert "10.0.0.1" in limiter._store
+        assert "192.168.1.100" not in limiter._store
 
     def test_cleanup_stale_removes_old_ips(self) -> None:
         """_cleanup_stale удаляет IP без актуальных запросов при > 100 записях."""

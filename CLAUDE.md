@@ -7,7 +7,7 @@ Instagram scraper — автономный Python-сервис для сбора
 ```bash
 make install                     # Install dependencies (uv sync)
 make dev                         # Run (API :8001 + worker + scheduler)
-make test                        # Run tests (840+)
+make test                        # Run tests (961+)
 make lint                        # Ruff linter
 make lint-fix                    # Ruff auto-fix
 make typecheck                   # Pyright basic mode
@@ -33,6 +33,7 @@ Single-process: FastAPI + polling worker + APScheduler в одном asyncio eve
 | `GET` | `/api/tasks` | Yes | List tasks (filters: status, task_type, limit, offset) |
 | `GET` | `/api/tasks/{id}` | Yes | Task status |
 | `POST` | `/api/tasks/scrape` | Yes | Create full_scrape by usernames |
+| `POST` | `/api/tasks/pre_filter` | Yes | Create pre_filter by usernames |
 | `POST` | `/api/tasks/discover` | Yes | Create discover by hashtag |
 | `POST` | `/api/tasks/{id}/retry` | Yes | Retry failed task |
 

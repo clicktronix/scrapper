@@ -467,6 +467,52 @@ class TestHandleDiscover:
         mock_scraper.discover.assert_called_once_with("beauty", 1000)
 
     @pytest.mark.asyncio
+    async def test_duplicate_discovered_username_creates_single_blog(self) -> None:
+        """Повторяющийся username в discovered не должен приводить к повторному insert."""
+        from src.worker.handlers import handle_discover
+
+        task = _make_task(
+            "discover",
+            payload={"hashtag": "beauty", "min_followers": 1000},
+        )
+
+        mock_db = MagicMock()
+        table_mock = MagicMock()
+        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+
+        empty_result = MagicMock()
+        empty_result.data = []
+        in_chain = table_mock.select.return_value.eq.return_value.in_.return_value
+        in_chain.execute.return_value = empty_result
+
+        person_result = MagicMock()
+        person_result.data = [{"id": "person-1"}]
+        blog_result = MagicMock()
+        blog_result.data = [{"id": "blog-1"}]
+        table_mock.insert.return_value.execute.side_effect = [person_result, blog_result]
+        mock_db.table.return_value = table_mock
+
+        mock_scraper = AsyncMock()
+        duplicate_profile = DiscoveredProfile(
+            username="dup_blogger",
+            full_name="Duplicate",
+            follower_count=5000,
+            platform_id="99999",
+        )
+        mock_scraper.discover.return_value = [duplicate_profile, duplicate_profile]
+
+        settings = MagicMock()
+        settings.rescrape_days = 60
+
+        with patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock) as mock_create:
+            await handle_discover(mock_db, task, mock_scraper, settings)
+
+        # insert(person) + insert(blog) только один раз для unique username.
+        assert table_mock.insert.return_value.execute.call_count == 2
+        mock_create.assert_called_once_with(mock_db, "blog-1", "full_scrape", priority=5)
+
+    @pytest.mark.asyncio
     async def test_no_hashtag_in_payload(self) -> None:
         from src.worker.handlers import handle_discover
 
