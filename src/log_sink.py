@@ -1,12 +1,12 @@
 """Loguru sink для записи WARNING+ логов в Supabase."""
 
 import asyncio
+import sys
 import threading
 import time
 from collections.abc import Callable
 from typing import Any
 
-from loguru import logger as _fallback_logger
 from supabase import AsyncClient
 
 from src.database import sanitize_error
@@ -31,7 +31,8 @@ def create_supabase_sink(db: AsyncClient, loop: asyncio.AbstractEventLoop) -> Ca
         try:
             await db.table("scrape_logs").insert(entry).execute()
         except Exception as e:
-            _fallback_logger.opt(depth=1).trace(f"Supabase log sink error: {e}")
+            # Пишем в stderr напрямую — нельзя через loguru, будет рекурсия
+            print(f"[log_sink] Supabase write error: {e}", file=sys.stderr, flush=True)
 
     def sink(message: Any) -> None:
         nonlocal last_write
@@ -61,6 +62,6 @@ def create_supabase_sink(db: AsyncClient, loop: asyncio.AbstractEventLoop) -> Ca
             }
             asyncio.run_coroutine_threadsafe(_write(entry), loop)
         except Exception as e:
-            _fallback_logger.opt(depth=1).trace(f"Supabase log sink error: {e}")
+            print(f"[log_sink] Sink error: {e}", file=sys.stderr, flush=True)
 
     return sink

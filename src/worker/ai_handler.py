@@ -196,13 +196,16 @@ async def _load_profiles_for_batch(
 
         # Сборка ScrapedProfile — все публикации в один список
         medias: list[ScrapedPost] = []
+        skipped_posts = 0
         for p in raw_posts:
             taken_at_raw = p.get("taken_at")
             if not taken_at_raw or not p.get("platform_id"):
+                skipped_posts += 1
                 continue
             try:
                 taken_at = datetime.fromisoformat(taken_at_raw.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
+                skipped_posts += 1
                 continue
 
             post = ScrapedPost(
@@ -226,6 +229,12 @@ async def _load_profiles_for_batch(
                 carousel_media_count=p.get("carousel_media_count"),
             )
             medias.append(post)
+
+        if skipped_posts:
+            logger.warning(
+                f"[batch] Blog {blog_id}: пропущено {skipped_posts}/{len(raw_posts)} постов "
+                f"(нет platform_id или невалидный taken_at)"
+            )
 
         highlights: list[ScrapedHighlight] = []
         for h in raw_highlights:

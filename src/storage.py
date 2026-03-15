@@ -32,7 +32,7 @@ async def load_session(db: AsyncClient, account_name: str) -> dict[str, Any] | N
         parsed = json.loads(data)
         # Сессия должна быть dict — list/str/int/bool не валидны
         if not isinstance(parsed, dict):
-            logger.debug(f"Invalid session format for {account_name}: expected dict, got {type(parsed).__name__}")
+            logger.warning(f"Invalid session format for {account_name}: expected dict, got {type(parsed).__name__}")
             return None
         return cast(dict[str, Any], parsed)
     except Exception as e:

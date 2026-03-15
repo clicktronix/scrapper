@@ -5,6 +5,7 @@ import time
 from collections import defaultdict
 
 from fastapi import HTTPException, Request
+from loguru import logger
 
 
 class RateLimiter:
@@ -78,6 +79,10 @@ class RateLimiter:
             self._store[client_ip] = [t for t in timestamps if t > window_start]
 
             if len(self._store[client_ip]) >= self.max_requests:
+                logger.warning(
+                    f"[rate_limit] 429 для {client_ip} "
+                    f"({len(self._store[client_ip])}/{self.max_requests} за {self.window_seconds}с)"
+                )
                 raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
             self._store[client_ip].append(now)
