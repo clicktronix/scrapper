@@ -513,7 +513,7 @@ async def _process_blog_result(
         if not already_refused:
             try:
                 await _h.create_task_if_not_exists(
-                    db, blog_id, "ai_analysis", priority=3,
+                    db, blog_id, "ai_analysis", priority=2,
                     payload={"text_only": True},
                 )
             except Exception as e:

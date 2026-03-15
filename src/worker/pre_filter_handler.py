@@ -4,6 +4,7 @@ import asyncio
 from datetime import UTC, datetime
 from typing import Any, cast
 
+import httpx
 from instagrapi.exceptions import UserNotFound
 from loguru import logger
 from supabase import AsyncClient
@@ -175,6 +176,12 @@ async def handle_pre_filter(
             db, task_id, current_attempts, task["max_attempts"], _h.sanitize_error(str(e)), retry=True
         )
         return
+    except httpx.TimeoutException as e:
+        logger.warning(f"[pre_filter] @{username}: таймаут при получении user_info ({type(e).__name__})")
+        await _h.mark_task_failed(
+            db, task_id, current_attempts, task["max_attempts"], _h.sanitize_error(str(e)), retry=True
+        )
+        return
     except Exception as e:
         logger.exception(f"[pre_filter] @{username}: неожиданная ошибка при получении user_info")
         await _h.mark_task_failed(
@@ -230,6 +237,12 @@ async def handle_pre_filter(
         )
         return
     except AllAccountsCooldownError as e:
+        await _h.mark_task_failed(
+            db, task_id, current_attempts, task["max_attempts"], _h.sanitize_error(str(e)), retry=True
+        )
+        return
+    except httpx.TimeoutException as e:
+        logger.warning(f"[pre_filter] @{username}: таймаут при загрузке постов/рилсов ({type(e).__name__})")
         await _h.mark_task_failed(
             db, task_id, current_attempts, task["max_attempts"], _h.sanitize_error(str(e)), retry=True
         )

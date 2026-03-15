@@ -4,6 +4,7 @@ import asyncio
 from datetime import UTC, datetime
 from typing import Any, cast
 
+import httpx
 from instagrapi.exceptions import UserNotFound
 from loguru import logger
 from supabase import AsyncClient
@@ -200,6 +201,13 @@ async def handle_full_scrape(
         await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
                                   _h.sanitize_error(str(e)), retry=True)
         return
+    except httpx.TimeoutException as e:
+        # Транзиентный таймаут — ретрай без needs_review
+        logger.warning(f"[full_scrape] @{username}: таймаут ({type(e).__name__})")
+        await db.table("blogs").update({"scrape_status": "pending"}).eq("id", blog_id).execute()
+        await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
+                                  _h.sanitize_error(str(e)), retry=True)
+        return
     except Exception as e:
         logger.exception(f"[full_scrape] @{username}: неожиданная ошибка скрапинга")
         # scrape_status="pending" при retry, чтобы worker мог подхватить снова
@@ -282,7 +290,7 @@ async def handle_full_scrape(
     # Создать задачу AI-анализа
     logger.debug(f"[full_scrape] @{username}: creating ai_analysis task...")
     try:
-        await _h.create_task_if_not_exists(db, blog_id, "ai_analysis", priority=3)
+        await _h.create_task_if_not_exists(db, blog_id, "ai_analysis", priority=2)
     except Exception as e:
         logger.error(f"[full_scrape] @{username}: не удалось создать ai_analysis задачу: {e}")
         # Не фейлим full_scrape — данные уже сохранены, ai_analysis можно создать вручную
