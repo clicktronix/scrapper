@@ -334,6 +334,117 @@ class TestSubmitBatch:
         assert mock_resolve.call_args_list[0][0][0] is profile2
 
 
+class TestSubmitBatchChunked:
+    """Тесты chunked streaming pipeline в submit_batch."""
+
+    @pytest.mark.asyncio
+    async def test_large_batch_processes_in_chunks(self) -> None:
+        """15 профилей обрабатываются чанками, все попадают в один JSONL."""
+        from unittest.mock import patch
+
+        from src.ai.batch_api import submit_batch
+
+        settings = _make_settings()
+        profiles = [(f"blog-{i}", _make_profile()) for i in range(15)]
+
+        mock_client = MagicMock()
+        mock_file = MagicMock()
+        mock_file.id = "file-chunked"
+        mock_client.files.create = AsyncMock(return_value=mock_file)
+
+        mock_batch = MagicMock()
+        mock_batch.id = "batch-chunked"
+        mock_client.batches.create = AsyncMock(return_value=mock_batch)
+
+        with patch(
+            "src.ai.batch_api.resolve_profile_images",
+            new_callable=AsyncMock, return_value={},
+        ) as mock_resolve:
+            batch_id = await submit_batch(mock_client, profiles, settings)
+
+        assert batch_id == "batch-chunked"
+        # resolve вызван для каждого профиля
+        assert mock_resolve.call_count == 15
+        # Один файл загружен в OpenAI (не по чанкам)
+        mock_client.files.create.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_chunked_text_only_mixed(self) -> None:
+        """text_only профили пропускают загрузку изображений в каждом чанке."""
+        from unittest.mock import patch
+
+        from src.ai.batch_api import submit_batch
+
+        settings = _make_settings()
+        # 12 профилей, 3 из них text_only (разбросаны по чанкам)
+        profiles = [(f"blog-{i}", _make_profile()) for i in range(12)]
+        text_only_ids = {"blog-0", "blog-5", "blog-11"}
+
+        mock_client = MagicMock()
+        mock_file = MagicMock()
+        mock_file.id = "file-mixed"
+        mock_client.files.create = AsyncMock(return_value=mock_file)
+
+        mock_batch = MagicMock()
+        mock_batch.id = "batch-mixed"
+        mock_client.batches.create = AsyncMock(return_value=mock_batch)
+
+        with patch(
+            "src.ai.batch_api.resolve_profile_images",
+            new_callable=AsyncMock, return_value={},
+        ) as mock_resolve:
+            await submit_batch(
+                mock_client, profiles, settings,
+                text_only_ids=text_only_ids,
+            )
+
+        # resolve вызван только для non-text-only (12 - 3 = 9)
+        assert mock_resolve.call_count == 9
+
+    @pytest.mark.asyncio
+    async def test_jsonl_content_valid(self) -> None:
+        """Каждая строка буфера — валидный JSON с правильным custom_id."""
+        from unittest.mock import patch
+
+        from src.ai.batch_api import submit_batch
+
+        settings = _make_settings()
+        profiles = [
+            ("blog-a", _make_profile()),
+            ("blog-b", _make_profile()),
+        ]
+
+        mock_client = MagicMock()
+        mock_file = MagicMock()
+        mock_file.id = "file-valid"
+
+        captured_buffer: bytes | None = None
+
+        async def capture_file(**kwargs):
+            nonlocal captured_buffer
+            _, buf = kwargs.get("file") or (None, None)
+            if buf is not None:
+                captured_buffer = buf.read()
+            return mock_file
+
+        mock_client.files.create = capture_file
+        mock_batch = MagicMock()
+        mock_batch.id = "batch-valid"
+        mock_client.batches.create = AsyncMock(return_value=mock_batch)
+
+        with patch(
+            "src.ai.batch_api.resolve_profile_images",
+            new_callable=AsyncMock, return_value={},
+        ):
+            await submit_batch(mock_client, profiles, settings)
+
+        assert captured_buffer is not None
+        lines = captured_buffer.decode("utf-8").strip().split("\n")
+        assert len(lines) == 2
+        ids = {json.loads(line)["custom_id"] for line in lines}
+        assert ids == {"blog-a", "blog-b"}
+
+
 class TestPollBatch:
     """Тесты проверки статуса батча."""
 

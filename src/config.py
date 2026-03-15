@@ -2,6 +2,7 @@
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
+from typing import Literal
 
 from dotenv import dotenv_values
 from pydantic import AliasChoices, Field, SecretStr, field_validator
@@ -100,7 +101,7 @@ class Settings(BaseSettings):
     # AI Batch
     batch_min_size: int = 10
     batch_model: str = "gpt-5-mini"
-    batch_reasoning_effort: str = "low"
+    batch_reasoning_effort: Literal["low", "medium", "high"] = "low"
 
     # AI
     embedding_model: str = "text-embedding-3-small"
@@ -128,7 +129,7 @@ class Settings(BaseSettings):
 
     # HikerAPI (альтернативный бэкенд)
     hikerapi_token: SecretStr = SecretStr("")
-    scraper_backend: str = "instagrapi"  # "instagrapi" | "hikerapi"
+    scraper_backend: Literal["instagrapi", "hikerapi"] = "instagrapi"
 
     @field_validator("scraper_api_key")
     @classmethod

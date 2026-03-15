@@ -6,6 +6,7 @@ from supabase import Client
 
 import src.worker.handlers as _h
 from src.config import Settings
+from src.models.db_types import TaskRecord
 from src.platforms.base import BaseScraper
 from src.platforms.instagram.exceptions import AllAccountsCooldownError
 from src.worker.scrape_handler import _normalize_username
@@ -20,7 +21,7 @@ def _as_row_dict(value: Any) -> dict[str, Any]:
 
 async def handle_discover(
     db: Client,
-    task: dict[str, Any],
+    task: TaskRecord,
     scraper: BaseScraper,
     settings: Settings,
 ) -> None:
@@ -54,6 +55,7 @@ async def handle_discover(
                                   _h.sanitize_error(str(e)), retry=True)
         return
     except Exception as e:
+        _h.logger.exception(f"[discover] Ошибка discover #{hashtag}")
         await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
                                   _h.sanitize_error(str(e)), retry=True)
         return
@@ -89,11 +91,11 @@ async def handle_discover(
             if not isinstance(blog_id_raw, str):
                 continue
             blog_id = blog_id_raw
-            if not await _h.is_blog_fresh(db, blog_id, settings.rescrape_days):
-                try:
+            try:
+                if not await _h.is_blog_fresh(db, blog_id, settings.rescrape_days):
                     await _h.create_task_if_not_exists(db, blog_id, "full_scrape", priority=5)
-                except Exception as e:
-                    _h.logger.error(f"[discover] Failed to create rescrape task for @{profile.username}: {e}")
+            except Exception as e:
+                _h.logger.error(f"[discover] Failed to check/create rescrape for @{profile.username}: {e}")
             continue
 
         # Создаём person + blog (ошибка одного профиля не ломает весь discover)

@@ -182,7 +182,7 @@ class TestRetryStaleBatchesEdge:
 
             mock_fail.assert_called_once_with(
                 mock_db, "t1", 3, 5,
-                "Batch not completed in 4h", retry=True,
+                "Batch not completed in 25h (exceeded OpenAI 24h window)", retry=True,
             )
 
 

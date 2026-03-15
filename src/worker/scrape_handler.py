@@ -11,6 +11,7 @@ from supabase import Client
 import src.worker.handlers as _h
 from src.config import Settings
 from src.models.blog import ScrapedComment, ScrapedProfile
+from src.models.db_types import TaskRecord
 from src.platforms.base import BaseScraper
 from src.platforms.instagram.exceptions import (
     AllAccountsCooldownError,
@@ -98,7 +99,7 @@ def _parse_top_comments(raw_value: Any) -> list[ScrapedComment]:
 
 async def handle_full_scrape(
     db: Client,
-    task: dict[str, Any],
+    task: TaskRecord,
     scraper: BaseScraper,
     settings: Settings,
     upload_semaphore: asyncio.Semaphore | None = None,
@@ -114,6 +115,10 @@ async def handle_full_scrape(
     """
     task_id = task["id"]
     blog_id = task["blog_id"]
+    if not blog_id:
+        await _h.mark_task_failed(db, task_id, task["attempts"], task["max_attempts"],
+                                  "No blog_id in full_scrape task", retry=False)
+        return
     logger.debug(f"[full_scrape] Starting task={task_id}, blog={blog_id}")
 
     was_claimed = await _h.mark_task_running(db, task_id)
@@ -207,6 +212,7 @@ async def handle_full_scrape(
                                   _h.sanitize_error(str(e)), retry=True)
         return
     except Exception as e:
+        logger.exception(f"[full_scrape] @{username}: неожиданная ошибка скрапинга")
         # scrape_status="pending" при retry, чтобы worker мог подхватить снова
         await _h.run_in_thread(
             db.table("blogs").update({
@@ -277,6 +283,7 @@ async def handle_full_scrape(
         await _h.upsert_highlights(db, blog_id, highlights_data)
         logger.debug(f"[full_scrape] @{username}: upserted {len(highlights_data)} highlights")
     except Exception as e:
+        logger.exception(f"[full_scrape] @{username}: ошибка upsert данных")
         await _h.run_in_thread(
             db.table("blogs").update({
                 "scrape_status": "failed",
@@ -289,7 +296,11 @@ async def handle_full_scrape(
 
     # Создать задачу AI-анализа
     logger.debug(f"[full_scrape] @{username}: creating ai_analysis task...")
-    await _h.create_task_if_not_exists(db, blog_id, "ai_analysis", priority=3)
+    try:
+        await _h.create_task_if_not_exists(db, blog_id, "ai_analysis", priority=3)
+    except Exception as e:
+        logger.error(f"[full_scrape] @{username}: не удалось создать ai_analysis задачу: {e}")
+        # Не фейлим full_scrape — данные уже сохранены, ai_analysis можно создать вручную
 
     await _h.mark_task_done(db, task_id)
     logger.info(f"Full scrape done for @{username} (blog={blog_id})")

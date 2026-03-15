@@ -18,12 +18,19 @@ from src.api.schemas import (
     PreFilterRequest,
     PreFilterResponse,
     RetryResponse,
+    SchedulerStatusResponse,
     ScrapeRequest,
     ScrapeResponse,
     TaskListResponse,
     TaskResponse,
 )
-from src.api.services import fetch_tasks_list, find_blog_by_username, find_or_create_blog, get_health_status
+from src.api.services import (
+    fetch_tasks_list,
+    find_blog_by_username,
+    find_or_create_blog,
+    get_health_status,
+    get_scheduler_status,
+)
 from src.config import Settings
 from src.database import create_task_if_not_exists, is_blog_fresh, run_in_thread
 from src.platforms.instagram.client import AccountPool
@@ -40,7 +47,7 @@ def _as_row_dict(value: Any) -> dict[str, Any]:
 
 def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> FastAPI:
     """Создать FastAPI-приложение с зависимостями."""
-    docs_enabled = settings.api_docs_enabled if isinstance(settings.api_docs_enabled, bool) else False
+    docs_enabled = settings.api_docs_enabled
     app = FastAPI(
         title="Scraper API",
         version="0.1.0",
@@ -90,6 +97,18 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
         return await get_health_status(db, pool, response)
 
     @app.get(
+        "/api/scheduler/status",
+        response_model=SchedulerStatusResponse,
+        dependencies=[Depends(check_rate_limit), Depends(verify_api_key)],
+    )
+    async def scheduler_status() -> dict[str, Any]:
+        """Статус планировщика — список cron/interval-задач."""
+        scheduler = getattr(app.state, "scheduler", None)
+        if scheduler is None:
+            return {"jobs": []}
+        return {"jobs": get_scheduler_status(scheduler)}
+
+    @app.get(
         "/api/tasks", response_model=TaskListResponse,
         dependencies=[Depends(check_rate_limit), Depends(verify_api_key)],
     )
@@ -121,7 +140,7 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
         response_model=ScrapeResponse,
         dependencies=[Depends(check_rate_limit), Depends(verify_api_key)],
     )
-    async def scrape(body: ScrapeRequest, response: Response) -> dict:
+    async def scrape(body: ScrapeRequest, response: Response) -> dict[str, Any]:
         """Создать full_scrape задачи по списку username."""
 
         async def _process_one(username: str) -> dict[str, Any]:
@@ -172,7 +191,7 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
         response_model=PreFilterResponse,
         dependencies=[Depends(check_rate_limit), Depends(verify_api_key)],
     )
-    async def pre_filter(body: PreFilterRequest, response: Response) -> dict:
+    async def pre_filter(body: PreFilterRequest, response: Response) -> dict[str, Any]:
         """Создать pre_filter задачи для проверки блогеров."""
         # 1. Параллельно проверяем существование всех блогеров в БД
         check_tasks = [find_blog_by_username(db, u) for u in body.usernames]
@@ -238,7 +257,7 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
         "/api/tasks/discover", status_code=201,
         response_model=DiscoverResponse, dependencies=[Depends(check_rate_limit), Depends(verify_api_key)],
     )
-    async def discover(body: DiscoverRequest) -> dict:
+    async def discover(body: DiscoverRequest) -> dict[str, Any]:
         """Создать discover задачу по хештегу."""
         task_id = await create_task_if_not_exists(
             db, None, "discover", priority=10,

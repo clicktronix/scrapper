@@ -10,6 +10,7 @@ from supabase import Client
 
 import src.worker.handlers as _h
 from src.config import Settings
+from src.models.db_types import TaskRecord
 from src.platforms.instagram.exceptions import (
     AllAccountsCooldownError,
     HikerAPIError,
@@ -79,8 +80,8 @@ async def _mark_filtered_out(
             .upsert(log_row, on_conflict="username,reason")
             .execute
         )
-    except Exception:
-        logger.warning(f"[pre_filter] Не удалось записать лог для @{username}")
+    except Exception as e:
+        logger.warning(f"[pre_filter] Не удалось записать лог для @{username}: {e}")
 
 
 def _parse_taken_at(value: Any) -> datetime | None:
@@ -105,7 +106,7 @@ def _parse_taken_at(value: Any) -> datetime | None:
 
 async def handle_pre_filter(
     db: Client,
-    task: dict[str, Any],
+    task: TaskRecord,
     scraper: Any,
     settings: Settings,
 ) -> None:
@@ -182,6 +183,12 @@ async def handle_pre_filter(
             db, task_id, current_attempts, task["max_attempts"], _h.sanitize_error(str(e)), retry=True
         )
         return
+    except Exception as e:
+        logger.exception(f"[pre_filter] @{username}: неожиданная ошибка при получении user_info")
+        await _h.mark_task_failed(
+            db, task_id, current_attempts, task["max_attempts"], _h.sanitize_error(str(e)), retry=True
+        )
+        return
 
     user = user_info.get("user", {})
 
@@ -231,6 +238,12 @@ async def handle_pre_filter(
         )
         return
     except AllAccountsCooldownError as e:
+        await _h.mark_task_failed(
+            db, task_id, current_attempts, task["max_attempts"], _h.sanitize_error(str(e)), retry=True
+        )
+        return
+    except Exception as e:
+        logger.exception(f"[pre_filter] @{username}: неожиданная ошибка при загрузке постов/рилсов")
         await _h.mark_task_failed(
             db, task_id, current_attempts, task["max_attempts"], _h.sanitize_error(str(e)), retry=True
         )

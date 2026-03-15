@@ -25,6 +25,25 @@ _CONFIDENCE_TO_FLOAT: dict[int, float] = {1: 0.20, 2: 0.40, 3: 0.60, 4: 0.80, 5:
 _ENRICHMENT_RETRY_ATTEMPTS = 3
 _ENRICHMENT_RETRY_DELAY_SECONDS = 0.2
 
+# Ошибки OpenAI, при которых задачи не должны терять attempts
+# (проблема на стороне платформы/биллинга, не конкретной задачи)
+_OPENAI_QUOTA_ERRORS = ("token_limit_exceeded", "billing_hard_limit_reached", "insufficient_quota")
+
+
+async def _safe_fail_tasks(
+    db: Client,
+    task_infos: list[tuple[str, int, int]],
+    error: str,
+    *,
+    retry: bool = True,
+) -> None:
+    """Пометить список задач как failed с обработкой ошибок каждой."""
+    for task_id, attempts, max_attempts in task_infos:
+        try:
+            await _h.mark_task_failed(db, task_id, attempts, max_attempts, error, retry=retry)
+        except Exception as fail_err:
+            logger.error(f"[batch_results] Не удалось пометить задачу {task_id} как failed: {fail_err}")
+
 
 def _has_successful_ai_insights(value: Any) -> bool:
     """Return True when ai_insights looks like a successful structured analysis."""
@@ -68,6 +87,10 @@ class BatchContext:
 def _extract_blog_fields(insights: AIInsights) -> dict[str, Any]:
     """Извлечь поля блога из AI-анализа для заполнения основных колонок."""
     fields: dict[str, Any] = {}
+
+    # Тип страницы (blog / public / business)
+    if insights.blogger_profile.page_type:
+        fields["page_type"] = insights.blogger_profile.page_type
 
     # Город (фильтруем мусор: "14% Казахстан", названия стран и т.д.)
     if insights.blogger_profile.city and is_valid_city(insights.blogger_profile.city):
@@ -325,6 +348,7 @@ async def handle_ai_analysis(
     profiles, task_ids, _ = await _load_profiles_for_batch(db, pending_tasks)
 
     if not profiles:
+        logger.debug("[ai_analysis] Нет профилей для батча после загрузки (все задачи failed или пустые)")
         return
 
     # Собираем text_only blog_id из payload задач (retry после refusal)
@@ -359,30 +383,74 @@ async def handle_ai_analysis(
         )
 
         # Сохраняем batch_id в payload (мержим с существующим, чтобы не затереть text_only)
+        save_failures: list[str] = []
         for tid in claimed_tasks:
-            existing_payload = pending_by_id.get(tid, {}).get("payload") or {}
-            merged_payload = {**existing_payload, "batch_id": batch_id}
-            await _h.run_in_thread(
-                db.table("scrape_tasks").update({
-                    "payload": merged_payload,
-                }).eq("id", tid).execute
+            try:
+                existing_payload = pending_by_id.get(tid, {}).get("payload") or {}
+                merged_payload = {**existing_payload, "batch_id": batch_id}
+                await _h.run_in_thread(
+                    db.table("scrape_tasks").update({
+                        "payload": merged_payload,
+                    }).eq("id", tid).execute
+                )
+            except Exception as save_err:
+                save_failures.append(tid)
+                logger.error(
+                    f"[ai_analysis] Не удалось сохранить batch_id={batch_id} "
+                    f"в задачу {tid}: {save_err}"
+                )
+
+        if save_failures:
+            logger.error(
+                f"[ai_analysis] CRITICAL: batch_id={batch_id} потерян для задач "
+                f"{save_failures}. Батч отправлен, но задачи не привязаны — "
+                f"требуется ручное восстановление"
             )
 
         logger.info(f"AI batch submitted: {batch_id}, {len(claimed_profiles)} profiles")
     except Exception as e:
-        for tid, (attempts, max_attempts) in claimed_tasks.items():
-            try:
-                await _h.mark_task_failed(
-                    db=db,
-                    task_id=tid,
-                    attempts=attempts,
-                    max_attempts=max_attempts,
-                    error=_h.sanitize_error(str(e)),
-                    retry=True,
-                )
-            except Exception as rollback_err:
-                logger.error(f"Failed to rollback task {tid}: {rollback_err}")
-        logger.error(f"Failed to submit AI batch: {e}")
+        error_str = str(e)
+        is_quota_error = any(code in error_str for code in _OPENAI_QUOTA_ERRORS)
+
+        if is_quota_error:
+            # Ошибки квоты/лимитов — откатываем claim и возвращаем в pending с backoff.
+            # mark_task_running уже инкрементировал attempts — восстанавливаем,
+            # чтобы платформенные ошибки не сжигали попытки задачи.
+            is_billing = "billing_hard_limit" in error_str or "insufficient_quota" in error_str
+            backoff_seconds = 3600 if is_billing else 600  # 1ч для биллинга, 10мин для token_limit
+            next_retry = datetime.now(UTC) + timedelta(seconds=backoff_seconds)
+            logger.warning(
+                f"[ai_analysis] OpenAI quota/limit error, returning {len(claimed_tasks)} tasks "
+                f"to pending (backoff={backoff_seconds}s): {_h.sanitize_error(error_str)[:200]}"
+            )
+            for tid in claimed_tasks:
+                attempts, _max = claimed_tasks[tid]
+                try:
+                    await _h.run_in_thread(
+                        db.table("scrape_tasks").update({
+                            "status": "pending",
+                            "attempts": attempts - 1,  # откат mark_task_running
+                            "error_message": _h.sanitize_error(error_str)[:500],
+                            "next_retry_at": next_retry.isoformat(),
+                        }).eq("id", tid).execute
+                    )
+                except Exception as rollback_err:
+                    logger.error(f"Failed to return task {tid} to pending: {rollback_err}")
+        else:
+            # Обычная ошибка — считаем как attempt, ретраим стандартно
+            for tid, (attempts, max_attempts) in claimed_tasks.items():
+                try:
+                    await _h.mark_task_failed(
+                        db=db,
+                        task_id=tid,
+                        attempts=attempts,
+                        max_attempts=max_attempts,
+                        error=_h.sanitize_error(error_str),
+                        retry=True,
+                    )
+                except Exception as rollback_err:
+                    logger.error(f"Failed to rollback task {tid}: {rollback_err}")
+            logger.error(f"Failed to submit AI batch: {e}")
 
 
 def _dedup_brands(brands: list[str]) -> list[str]:
@@ -405,9 +473,10 @@ async def _retry_enrichment(
     for attempt in range(_ENRICHMENT_RETRY_ATTEMPTS):
         try:
             return await fn()
-        except Exception:
+        except Exception as e:
             if attempt == _ENRICHMENT_RETRY_ATTEMPTS - 1:
                 raise
+            logger.warning(f"[enrichment] retry {attempt + 1}/{_ENRICHMENT_RETRY_ATTEMPTS}: {e}")
             await asyncio.sleep(_ENRICHMENT_RETRY_DELAY_SECONDS * (attempt + 1))
     return {"total": 0, "matched": 0, "unmatched": 0}  # unreachable
 
@@ -456,15 +525,6 @@ async def _process_blog_result(
             except Exception as e:
                 logger.error(f"[batch_results] Failed to create text_only retry for {blog_id}: {e}")
 
-    elif insights is None:
-        # API error (не refusal) — помечаем ai_analyzed без insights
-        logger.debug(f"[batch_results] Blog {blog_id}: no insights (API error)")
-        await _h.run_in_thread(
-            db.table("blogs").update({
-                "scrape_status": "ai_analyzed",
-                "ai_analyzed_at": datetime.now(UTC).isoformat(),
-            }).eq("id", blog_id).execute
-        )
     else:
         # Успешный AIInsights — экстракция полей (только пустые)
         if not isinstance(insights, AIInsights):
@@ -571,6 +631,7 @@ async def handle_batch_results(
         logger.warning(
             f"[batch_results] Batch {batch_id} {result['status']}, retrying tasks"
         )
+        all_task_infos: list[tuple[str, int, int]] = []
         for _blog_id, val in task_ids_by_blog.items():
             items = val if isinstance(val, list) else [val]
             for item in items:
@@ -581,10 +642,8 @@ async def handle_batch_results(
                 else:
                     tid, att, ma = item, 1, 3
                 if tid:
-                    await _h.mark_task_failed(
-                        db, tid, att, ma,
-                        f"Batch {result['status']}", retry=True,
-                    )
+                    all_task_infos.append((tid, att, ma))
+        await _safe_fail_tasks(db, all_task_infos, f"Batch {result['status']}")
         return
 
     # poll_batch возвращает results для completed и expired (partial results)
@@ -655,26 +714,31 @@ async def handle_batch_results(
 
         processed_blog_ids.add(blog_id)
 
+        # insights=None означает API error (не refusal) — retry задачи
+        if insights is None:
+            logger.warning(f"[batch_results] Blog {blog_id}: no insights (API error), retry")
+            await _safe_fail_tasks(
+                db, task_infos, "OpenAI API error: no insights in batch result",
+            )
+            continue
+
         try:
             await _process_blog_result(ctx, blog_id, insights)
         except Exception as e:
-            # Ошибка одного блога не должна убивать весь батч —
-            # помечаем задачу как failed с retry и продолжаем
+            # Ошибка одного блога не должна убивать весь батч
             logger.error(f"[batch_results] Blog {blog_id} failed: {e}")
-            for task_id, attempts, max_attempts in task_infos:
-                try:
-                    await _h.mark_task_failed(
-                        db, task_id, attempts, max_attempts,
-                        f"Error processing batch result: {e}", retry=True,
-                    )
-                except Exception as fail_err:
-                    logger.error(
-                        f"[batch_results] Failed to mark task {task_id} as failed: {fail_err}"
-                    )
+            await _safe_fail_tasks(
+                db, task_infos, f"Error processing batch result: {e}",
+            )
             continue
 
         for task_id, _, _ in task_infos:
-            await _h.mark_task_done(db, task_id)
+            try:
+                await _h.mark_task_done(db, task_id)
+            except Exception as done_err:
+                logger.error(
+                    f"[batch_results] Не удалось пометить задачу {task_id} как done: {done_err}"
+                )
 
     # Expired батч: задачи без результатов → retry (не ждать 26ч retry_stale_batches)
     if result["status"] == "expired":
@@ -684,24 +748,29 @@ async def handle_batch_results(
                 if not task_infos:
                     logger.warning(f"Skipping expired retry for {blog_id}: no task_id")
                     continue
-                for task_id, attempts, max_attempts in task_infos:
-                    await _h.mark_task_failed(
-                        db, task_id, attempts, max_attempts,
-                        "Batch expired without result for this task", retry=True,
-                    )
+                await _safe_fail_tasks(
+                    db, task_infos, "Batch expired without result for this task",
+                )
 
     # Параллельная генерация embedding для всех блогов батча
     if ctx.pending_embeddings:
+        # Семафор ограничивает параллельные run_in_thread вызовы,
+        # чтобы не исчерпать thread pool (EAGAIN на Railway)
+        embed_semaphore = asyncio.Semaphore(5)
+
         async def _generate_and_save(blog_id: str, text: str) -> None:
             try:
                 vector = await _h.generate_embedding(openai_client, text)
                 if vector:
-                    await _h.run_in_thread(
-                        db.table("blogs").update({
-                            "embedding": vector,
-                        }).eq("id", blog_id).execute
-                    )
+                    async with embed_semaphore:
+                        await _h.run_in_thread(
+                            db.table("blogs").update({
+                                "embedding": vector,
+                            }).eq("id", blog_id).execute
+                        )
                     logger.debug(f"[batch_results] Blog {blog_id}: embedding saved ({len(vector)} dim)")
+                else:
+                    logger.warning(f"[batch_results] Blog {blog_id}: embedding не сгенерирован (rate limit?)")
             except Exception as e:
                 logger.error(f"Failed to generate embedding for blog {blog_id}: {e}")
 

@@ -57,7 +57,20 @@ ignore = [
 
 [tool.pyright]
 pythonVersion = "3.13"
-typeCheckingMode = "standard"
+typeCheckingMode = "strict"
+# Supabase/instagrapi/apscheduler не типизированы — Unknown неизбежен
+reportUnknownMemberType = "warning"
+reportUnknownVariableType = "warning"
+reportUnknownArgumentType = "warning"
+reportUnknownParameterType = "warning"
+# handlers.py re-export паттерн для тестового мокирования
+reportUnusedImport = false
+# _private доступ из тестов и handlers re-exports
+reportPrivateUsage = false
+# FastAPI route decorators + handlers re-exports — pyright не видит usage
+reportUnusedFunction = false
+# Нетипизированные сторонние библиотеки
+reportMissingTypeStubs = false
 
 [dependency-groups]
 dev = [

@@ -772,8 +772,8 @@ class TestHandleBatchResults:
         assert ai_updates[0]["scrape_status"] == "ai_analyzed"
 
     @pytest.mark.asyncio
-    async def test_completed_with_refusal(self) -> None:
-        """Refusal (insights=None) → scrape_status=ai_analyzed без insights."""
+    async def test_completed_with_none_insights_retries(self) -> None:
+        """insights=None (API error) → mark_task_failed с retry, не ai_analyzed."""
         from src.worker.handlers import handle_batch_results
 
         db = _mock_db_for_batch()
@@ -789,13 +789,20 @@ class TestHandleBatchResults:
             )
 
         update_calls = db.table.return_value.update.call_args_list
+        # Не должно быть ai_analyzed — задача должна быть помечена для retry
         status_updates = [
             c[0][0] for c in update_calls
             if c[0][0].get("scrape_status") == "ai_analyzed"
         ]
-        assert len(status_updates) >= 1
-        # При refusal не должно быть ai_insights
-        assert "ai_insights" not in status_updates[0]
+        assert len(status_updates) == 0
+
+        # Должен быть вызов mark_task_failed (status="pending" с retry)
+        retry_updates = [
+            c[0][0] for c in update_calls
+            if c[0][0].get("status") == "pending"
+            and "error_message" in c[0][0]
+        ]
+        assert len(retry_updates) >= 1
 
     @pytest.mark.asyncio
     async def test_skips_unknown_blog_id(self) -> None:
@@ -880,7 +887,7 @@ class TestHandleBatchResults:
 
     @pytest.mark.asyncio
     async def test_expired_batch_with_partial_results(self) -> None:
-        """Expired батч с частичными результатами — обрабатываются."""
+        """Expired батч с частичными результатами — blog-1 done, blog-2 retry."""
         from src.worker.handlers import handle_batch_results
 
         db = _mock_db_for_batch()
@@ -905,13 +912,21 @@ class TestHandleBatchResults:
             # match_categories вызывается для blog-1 (insights)
             mock_match.assert_called_once_with(db, "blog-1", insights, categories={})
 
-        # Обновления прошли для обоих блогов
         update_calls = db.table.return_value.update.call_args_list
-        active_updates = [
+        # blog-1 → ai_analyzed (успешный insights)
+        ai_analyzed_updates = [
             c[0][0] for c in update_calls
             if c[0][0].get("scrape_status") == "ai_analyzed"
         ]
-        assert len(active_updates) == 2
+        assert len(ai_analyzed_updates) == 1
+
+        # blog-2 → retry (insights=None → pending с error_message)
+        retry_updates = [
+            c[0][0] for c in update_calls
+            if c[0][0].get("status") == "pending"
+            and "error_message" in c[0][0]
+        ]
+        assert len(retry_updates) >= 1
 
     @pytest.mark.asyncio
     async def test_expired_batch_retries_missing_tasks(self) -> None:

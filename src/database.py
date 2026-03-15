@@ -241,7 +241,7 @@ async def recover_stuck_tasks(
     ai_analysis — таймаут max_ai_running_minutes (по умолчанию 24ч).
       AI задачи зависают если handle_batch_results упал с исключением
       (например \u0000 в PostgreSQL). retry_stale_batches — последняя линия
-      обороны (4ч), а эта функция — основная.
+      обороны (25ч, после окна OpenAI Batch API), а эта функция — основная.
     """
     threshold = (
         datetime.now(UTC) - timedelta(minutes=max_running_minutes)
@@ -251,7 +251,7 @@ async def recover_stuck_tasks(
     ).isoformat()
 
     # Параллельно: короткий таймаут для scrape/discover/pre_filter, длинный для ai
-    result, ai_result = await asyncio.gather(
+    raw_results = await asyncio.gather(
         run_in_thread(
             db.table("scrape_tasks")
             .select("id, task_type, attempts, max_attempts")
@@ -268,9 +268,18 @@ async def recover_stuck_tasks(
             .lt("started_at", ai_threshold)
             .execute
         ),
+        return_exceptions=True,
     )
 
-    all_tasks = [_as_dict_row(t) for t in (result.data or []) + (ai_result.data or [])]
+    # Собираем результаты, пропуская ошибочные запросы
+    combined_data: list[Any] = []
+    for r in raw_results:
+        if isinstance(r, BaseException):
+            logger.error(f"[recover] Ошибка запроса stuck tasks: {r}")
+            continue
+        combined_data.extend(r.data or [])
+
+    all_tasks = [_as_dict_row(t) for t in combined_data]
     all_tasks = [t for t in all_tasks if t]
     if not all_tasks:
         return 0
@@ -300,8 +309,14 @@ async def recover_stuck_tasks(
         )
         return True
 
-    results = await asyncio.gather(*[_recover_one(t) for t in all_tasks])
-    recovered = sum(1 for r in results if r)
+    results = await asyncio.gather(*[_recover_one(t) for t in all_tasks], return_exceptions=True)
+    recovered = 0
+    for i, r in enumerate(results):
+        if isinstance(r, BaseException):
+            task_id = all_tasks[i].get("id", "?")
+            logger.error(f"[recover] Ошибка восстановления задачи {task_id}: {r}")
+        elif r:
+            recovered += 1
 
     if recovered:
         logger.warning(f"Recovered {recovered} stuck tasks")
@@ -322,14 +337,14 @@ async def cleanup_orphan_person(db: Client, person_id: str) -> None:
         logger.warning(f"[cleanup_orphan] Ошибка очистки person {person_id}: {e}")
 
 
-async def upsert_blog(db: Client, blog_id: str, data: dict) -> None:
+async def upsert_blog(db: Client, blog_id: str, data: dict[str, Any]) -> None:
     """Обновить данные блога из скрапинга."""
     await run_in_thread(
         db.table("blogs").update(data).eq("id", blog_id).execute
     )
 
 
-async def upsert_posts(db: Client, blog_id: str, posts: list[dict]) -> None:
+async def upsert_posts(db: Client, blog_id: str, posts: list[dict[str, Any]]) -> None:
     """Upsert постов блогера. ON CONFLICT (blog_id, platform_id) DO UPDATE."""
     if not posts:
         return
@@ -341,7 +356,7 @@ async def upsert_posts(db: Client, blog_id: str, posts: list[dict]) -> None:
     )
 
 
-async def upsert_highlights(db: Client, blog_id: str, highlights: list[dict]) -> None:
+async def upsert_highlights(db: Client, blog_id: str, highlights: list[dict[str, Any]]) -> None:
     """Upsert хайлайтов блогера."""
     if not highlights:
         return

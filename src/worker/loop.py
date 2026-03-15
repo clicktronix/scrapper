@@ -1,6 +1,7 @@
 """Основной цикл воркера — polling + обработка задач."""
 import asyncio
 import contextlib
+import gc
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -138,6 +139,12 @@ async def process_task(
                 )
             except Exception as fail_err:
                 logger.error(f"Failed to mark task {task_id} as failed: {fail_err}")
+        finally:
+            # AI-задачи и full_scrape могут выделять сотни МБ (изображения, JSONL).
+            # Принудительный GC гарантирует освобождение циклических ссылок
+            # до следующего поллинга. С PYTHONMALLOC=malloc память возвращается ОС.
+            if task_type in ("ai_analysis", "full_scrape"):
+                gc.collect()
 
 
 async def run_worker(
@@ -170,9 +177,12 @@ async def run_worker(
         active_tasks.discard(t)
         processing_ids.discard(task_id)
 
+    consecutive_errors = 0
+
     while not shutdown_event.is_set():
         try:
             tasks = await fetch_pending_tasks(db, limit=10)
+            consecutive_errors = 0  # сброс при успешном fetch
 
             if tasks:
                 logger.info(f"Fetched {len(tasks)} pending tasks")
@@ -194,8 +204,16 @@ async def run_worker(
                 active_tasks.add(t)
                 t.add_done_callback(lambda done_t, tid=task_id: _on_task_done(tid, done_t))
 
+        except asyncio.CancelledError:
+            raise
         except Exception:
-            logger.exception("Error in worker loop")
+            consecutive_errors += 1
+            backoff = min(consecutive_errors * 5, 60)  # 5с, 10с, ..., макс 60с
+            logger.exception(f"Error in worker loop (consecutive={consecutive_errors}, backoff={backoff}s)")
+            # Backoff при persistent ошибках (например, БД недоступна)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(shutdown_event.wait(), timeout=backoff)
+            continue
 
         # Ждём poll_interval или shutdown
         with contextlib.suppress(TimeoutError):

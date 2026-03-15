@@ -1,4 +1,5 @@
 """APScheduler cron-задачи для скрапера."""
+import gc
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -28,6 +29,19 @@ from src.database import (
 from src.image_storage import delete_blog_images
 from src.worker.handlers import handle_batch_results
 
+# Время последнего запуска каждой cron/interval-задачи (UTC ISO)
+_last_run_at: dict[str, str] = {}
+
+
+def record_job_run(job_id: str) -> None:
+    """Записать текущее UTC-время как момент последнего запуска задачи."""
+    _last_run_at[job_id] = datetime.now(UTC).isoformat()
+
+
+def get_last_run_times() -> dict[str, str]:
+    """Вернуть копию словаря последних запусков."""
+    return dict(_last_run_at)
+
 
 def _as_rows(data: Any) -> list[dict[str, Any]]:
     """Нормализовать result.data к списку dict-строк."""
@@ -42,6 +56,7 @@ def _as_rows(data: Any) -> list[dict[str, Any]]:
 
 async def schedule_updates(db: Client, settings: Settings) -> None:
     """Создать задачи re-scrape для блогов, где scraped_at > rescrape_days дней."""
+    record_job_run("schedule_updates")
     threshold = (datetime.now(UTC) - timedelta(days=settings.rescrape_days)).isoformat()
 
     result = await run_in_thread(
@@ -59,17 +74,21 @@ async def schedule_updates(db: Client, settings: Settings) -> None:
         blog_id = blog.get("id")
         if not isinstance(blog_id, str):
             continue
-        task_id = await create_task_if_not_exists(
-            db, blog_id, "full_scrape", priority=8
-        )
-        if task_id:
-            created += 1
+        try:
+            task_id = await create_task_if_not_exists(
+                db, blog_id, "full_scrape", priority=8
+            )
+            if task_id:
+                created += 1
+        except Exception as e:
+            logger.error(f"[schedule_updates] Ошибка создания re-scrape для blog {blog_id}: {e}")
 
     logger.info(f"Scheduled {created} blog re-scrape tasks")
 
 
 async def poll_batches(db: Client, openai_client: AsyncOpenAI) -> None:
     """Проверить статус running ai_analysis батчей."""
+    record_job_run("poll_batches")
     logger.debug("[poll_batches] Checking running ai_analysis tasks...")
     result = await run_in_thread(
         db.table("scrape_tasks")
@@ -89,28 +108,39 @@ async def poll_batches(db: Client, openai_client: AsyncOpenAI) -> None:
     # или при коллизиях blog_id:
     # {blog_id: [ {"id": ...}, {"id": ...} ]}
     batches: dict[str, dict[str, Any]] = {}
+    orphaned_task_ids: list[str] = []
     for task in _as_rows(result.data):
         payload = task.get("payload")
         payload_dict = payload if isinstance(payload, dict) else {}
         batch_id = payload_dict.get("batch_id")
-        if isinstance(batch_id, str) and batch_id:
-            if batch_id not in batches:
-                batches[batch_id] = {}
-            task_info = {
-                "id": str(task.get("id", "")),
-                "attempts": int(task.get("attempts", 1) or 1),
-                "max_attempts": int(task.get("max_attempts", 3) or 3),
-            }
-            blog_id = str(task.get("blog_id", ""))
-            if not blog_id:
-                continue
-            existing = batches[batch_id].get(blog_id)
-            if existing is None:
-                batches[batch_id][blog_id] = task_info
-            elif isinstance(existing, list):
-                existing.append(task_info)
-            else:
-                batches[batch_id][blog_id] = [existing, task_info]
+        if not (isinstance(batch_id, str) and batch_id):
+            orphaned_task_ids.append(str(task.get("id", "?")))
+            continue
+
+        # batch_id гарантированно str и непустой после проверки выше
+        if batch_id not in batches:
+            batches[batch_id] = {}
+        task_info = {
+            "id": str(task.get("id", "")),
+            "attempts": int(task.get("attempts", 1) or 1),
+            "max_attempts": int(task.get("max_attempts", 3) or 3),
+        }
+        blog_id = str(task.get("blog_id", ""))
+        if not blog_id:
+            continue
+        existing = batches[batch_id].get(blog_id)
+        if existing is None:
+            batches[batch_id][blog_id] = task_info
+        elif isinstance(existing, list):
+            existing.append(task_info)
+        else:
+            batches[batch_id][blog_id] = [existing, task_info]
+
+    if orphaned_task_ids:
+        logger.warning(
+            f"[poll_batches] {len(orphaned_task_ids)} running ai_analysis задач "
+            f"без batch_id (потеря batch_id при сохранении?): {orphaned_task_ids[:10]}"
+        )
 
     logger.debug(f"[poll_batches] Found {len(batches)} active batches, "
                  f"{len(result.data)} running tasks")
@@ -120,12 +150,20 @@ async def poll_batches(db: Client, openai_client: AsyncOpenAI) -> None:
         try:
             await handle_batch_results(db, openai_client, batch_id, task_ids_by_blog)
         except Exception as e:
-            logger.error(f"Error polling batch {batch_id}: {e}")
+            logger.exception(f"Error polling batch {batch_id}: {e}")
+        finally:
+            gc.collect()
 
 
 async def retry_stale_batches(db: Client, openai_client: AsyncOpenAI, settings: Settings) -> None:
-    """Пересобрать батчи, которые не завершились за 4 часа (последняя линия обороны)."""
-    threshold = (datetime.now(UTC) - timedelta(hours=4)).isoformat()
+    """Пересобрать батчи, которые не завершились за 25 часов (последняя линия обороны).
+
+    OpenAI Batch API гарантирует выполнение в пределах 24ч.
+    25ч = 24ч окно + 1ч буфер на обработку результатов.
+    """
+    record_job_run("retry_stale_batches")
+    logger.debug("[retry_stale_batches] Проверяем зависшие батчи...")
+    threshold = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
 
     result = await run_in_thread(
         db.table("scrape_tasks")
@@ -139,23 +177,30 @@ async def retry_stale_batches(db: Client, openai_client: AsyncOpenAI, settings: 
     if not result.data:
         return
 
+    retried = 0
     for task in _as_rows(result.data):
         task_id = task.get("id")
         if not isinstance(task_id, str):
             continue
-        await mark_task_failed(
-            db,
-            task_id,
-            int(task.get("attempts", 1) or 1),
-            int(task.get("max_attempts", 3) or 3),
-            "Batch not completed in 4h", retry=True,
-        )
+        try:
+            await mark_task_failed(
+                db,
+                task_id,
+                int(task.get("attempts", 1) or 1),
+                int(task.get("max_attempts", 3) or 3),
+                "Batch not completed in 25h (exceeded OpenAI 24h window)", retry=True,
+            )
+            retried += 1
+        except Exception as e:
+            logger.error(f"[retry_stale_batches] Ошибка retry задачи {task_id}: {e}")
 
-    logger.warning(f"Retried {len(result.data)} stale AI batch tasks")
+    if retried:
+        logger.warning(f"Retried {retried} stale AI batch tasks")
 
 
 async def cleanup_old_images(db: Client, settings: Settings) -> None:
     """Удалить изображения блогов с scraped_at > rescrape_days дней назад."""
+    record_job_run("cleanup_old_images")
     threshold = (datetime.now(UTC) - timedelta(days=settings.rescrape_days)).isoformat()
 
     result = await run_in_thread(
@@ -186,6 +231,7 @@ async def retry_missing_embeddings(
     db: Client, openai_client: AsyncOpenAI
 ) -> None:
     """Перегенерировать embedding для блогов с insights но без вектора."""
+    record_job_run("retry_missing_embeddings")
     result = await run_in_thread(
         db.table("blogs")
         .select("id, ai_insights")
@@ -199,6 +245,7 @@ async def retry_missing_embeddings(
         return
 
     regenerated = 0
+    failed = 0
     for blog in _as_rows(result.data):
         blog_id = blog.get("id")
         if not isinstance(blog_id, str):
@@ -208,6 +255,7 @@ async def retry_missing_embeddings(
             text = build_embedding_text(insights)
             if text is None:
                 logger.warning(f"[retry_embedding] Blog {blog_id}: пустой текст для embedding, пропускаем")
+                failed += 1
                 continue
             vector = await generate_embedding(openai_client, text)
             if vector:
@@ -215,18 +263,25 @@ async def retry_missing_embeddings(
                     db.table("blogs").update({"embedding": vector}).eq("id", blog_id).execute
                 )
                 regenerated += 1
+            else:
+                failed += 1
         except openai.RateLimitError:
             logger.warning("[retry_embedding] Rate limited, stopping batch")
             break
         except Exception as e:
+            failed += 1
             logger.error(f"[retry_embedding] Blog {blog_id}: {e}")
 
-    if regenerated:
-        logger.info(f"[retry_embedding] Перегенерировано {regenerated} embedding'ов")
+    if regenerated or failed:
+        logger.info(
+            f"[retry_embedding] Результат: {regenerated} успешно, {failed} ошибок "
+            f"(из {len(result.data)} блогов без embedding)"
+        )
 
 
 async def retry_taxonomy_mappings(db: Client) -> None:
     """Повторить матчинг категорий/тегов по уже сохранённым ai_insights."""
+    record_job_run("retry_taxonomy_mappings")
     result = await run_in_thread(
         db.table("blogs")
         .select("id, ai_insights")
@@ -276,6 +331,7 @@ async def retry_taxonomy_mappings(db: Client) -> None:
 
 async def audit_taxonomy_drift(db: Client) -> None:
     """Проверить расхождения taxonomy из prompt и справочников БД."""
+    record_job_run("audit_taxonomy_drift")
     categories_cache = await load_categories(db)
     tags_cache = await load_tags(db)
 
@@ -313,7 +369,11 @@ async def audit_taxonomy_drift(db: Client) -> None:
 
 async def recover_tasks(db: Client) -> None:
     """Вернуть зависшие running задачи в pending (full_scrape, discover)."""
-    await recover_stuck_tasks(db, max_running_minutes=30)
+    record_job_run("recover_tasks")
+    try:
+        await recover_stuck_tasks(db, max_running_minutes=30)
+    except Exception as e:
+        logger.exception(f"[recover_tasks] Ошибка восстановления зависших задач: {e}")
 
 
 def create_scheduler(

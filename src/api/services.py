@@ -1,18 +1,24 @@
 """Бизнес-логика API скрапера — вынесена из route handlers."""
 import asyncio
 import time
-from typing import Any, cast
+from typing import Any, cast, get_args
 
+from apscheduler.job import Job
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import Response
 from loguru import logger
 from postgrest.exceptions import APIError as PostgrestAPIError
 from postgrest.types import CountMethod
 from supabase import Client
 
-from src.api.schemas import HealthResponse
+from src.api.schemas import HealthResponse, QueueDepthItem
 from src.database import cleanup_orphan_person, run_in_thread
-from src.models.db_types import TaskListResultWithError
+from src.models.db_types import TaskListResultWithError, TaskType
 from src.platforms.instagram.client import AccountPool
+from src.worker.scheduler import get_last_run_times
+
+# Извлекаем допустимые task_type из Literal-типа, чтобы не дублировать список
+_TASK_TYPES: tuple[str, ...] = get_args(TaskType.__value__)
 
 
 def _is_unique_violation(error: PostgrestAPIError) -> bool:
@@ -145,13 +151,119 @@ async def get_health_status(
     else:
         status = "ok"
 
+    # Глубина очереди по task_type
+    queue_depth = await _get_queue_depth(db)
+
     return HealthResponse(
         status=status,
         accounts_total=accounts_total,
         accounts_available=accounts_available,
         tasks_running=tasks_running,
         tasks_pending=tasks_pending,
+        queue_depth=queue_depth,
     )
+
+
+# Маппинг job.id → (человекочитаемое имя, описание интервала)
+JOB_NAMES: dict[str, tuple[str, str]] = {
+    "schedule_updates": ("Schedule Updates", "daily at 03:00"),
+    "poll_batches": ("Poll AI Batches", "every 15 min"),
+    "retry_stale_batches": ("Retry Stale Batches", "every 2 hours (25h threshold)"),
+    "cleanup_old_images": ("Cleanup Old Images", "weekly Sun 04:00"),
+    "retry_missing_embeddings": ("Retry Missing Embeddings", "every 1 hour"),
+    "retry_taxonomy_mappings": ("Retry Taxonomy Mappings", "every 2 hours"),
+    "audit_taxonomy_drift": ("Audit Taxonomy Drift", "daily at 05:00"),
+    "recover_tasks": ("Recover Stuck Tasks", "every 10 min"),
+}
+
+
+def get_scheduler_status(scheduler: AsyncIOScheduler) -> list[dict[str, Any]]:
+    """Собрать статус каждой задачи планировщика."""
+    last_runs = get_last_run_times()
+    jobs: list[dict[str, Any]] = []
+
+    raw_jobs = cast(list[Job], scheduler.get_jobs())
+    for job in raw_jobs:
+        job_id = str(job.id)
+        name, interval = JOB_NAMES.get(job_id, (job_id, "unknown"))
+        next_run = str(job.next_run_time.isoformat()) if job.next_run_time else None
+        last_run = last_runs.get(job_id)
+        status = "ok" if last_run else "unknown"
+        jobs.append({
+            "id": job_id,
+            "name": name,
+            "interval": interval,
+            "last_run_at": last_run,
+            "next_run_at": next_run,
+            "status": status,
+        })
+
+    return jobs
+
+
+async def _get_queue_depth(db: Client) -> dict[str, QueueDepthItem] | None:
+    """Получить глубину очереди по task_type. Graceful degradation при ошибках."""
+    try:
+        # Пробуем RPC (быстрее — один запрос)
+        rpc_result = await run_in_thread(
+            db.rpc("get_queue_depth", {}).execute
+        )
+        rpc_rows = rpc_result.data
+        if isinstance(rpc_rows, list) and rpc_rows:
+            depth: dict[str, QueueDepthItem] = {}
+            for raw_row in rpc_rows:
+                if not isinstance(raw_row, dict):
+                    continue
+                row_dict = cast(dict[str, Any], raw_row)
+                task_type = str(row_dict.get("task_type", ""))
+                rpc_status = str(row_dict.get("status", ""))
+                cnt = int(row_dict.get("cnt", 0))
+                if task_type not in depth:
+                    depth[task_type] = QueueDepthItem()
+                if rpc_status == "pending":
+                    depth[task_type].pending = cnt
+                elif rpc_status == "running":
+                    depth[task_type].running = cnt
+            return depth
+    except Exception as e:
+        logger.debug(f"[health] RPC get_queue_depth недоступна, fallback к count-запросам: {e}")
+
+    # Fallback: параллельные count-запросы (pending + running) по каждому task_type
+    try:
+        task_types = list(_TASK_TYPES)
+        coros = []
+        for tt in task_types:
+            coros.append(
+                run_in_thread(
+                    db.table("scrape_tasks")
+                    .select("id", count=CountMethod.exact)
+                    .eq("task_type", tt)
+                    .eq("status", "pending")
+                    .execute
+                )
+            )
+            coros.append(
+                run_in_thread(
+                    db.table("scrape_tasks")
+                    .select("id", count=CountMethod.exact)
+                    .eq("task_type", tt)
+                    .eq("status", "running")
+                    .execute
+                )
+            )
+
+        results = await asyncio.gather(*coros, return_exceptions=True)
+        depth_fb: dict[str, QueueDepthItem] = {}
+        for i, tt in enumerate(task_types):
+            pending_res = results[i * 2]
+            running_res = results[i * 2 + 1]
+            p = (pending_res.count or 0) if not isinstance(pending_res, BaseException) else 0
+            r = (running_res.count or 0) if not isinstance(running_res, BaseException) else 0
+            depth_fb[tt] = QueueDepthItem(pending=p, running=r)
+        return depth_fb
+    except Exception as e:
+        logger.error(f"[health] Ошибка получения queue_depth: {e}")
+        return None
 
 
 async def fetch_tasks_list(

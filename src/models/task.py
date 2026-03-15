@@ -1,8 +1,10 @@
 """Pydantic-модель задачи скрапинга."""
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel
+
+from src.models.db_types import TaskStatus, TaskType
 
 
 class ScrapeTask(BaseModel):
@@ -10,8 +12,8 @@ class ScrapeTask(BaseModel):
 
     id: str
     blog_id: str | None  # None для discover/pre_filter задач
-    task_type: Literal["full_scrape", "ai_analysis", "discover", "pre_filter"]
-    status: Literal["pending", "running", "done", "failed"]
+    task_type: TaskType
+    status: TaskStatus
     priority: int
     payload: dict[str, Any] = {}
     attempts: int = 0

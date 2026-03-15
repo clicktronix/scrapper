@@ -1,5 +1,6 @@
 """Загрузка изображений Instagram в Supabase Storage для постоянного хранения."""
 import asyncio
+from typing import Any
 
 import httpx
 from loguru import logger
@@ -146,7 +147,7 @@ async def persist_profile_images(
     supabase_url: str,
     blog_id: str,
     avatar_cdn_url: str | None,
-    posts: list[dict],
+    posts: list[dict[str, Any]],
     upload_semaphore: asyncio.Semaphore | None = None,
 ) -> tuple[str | None, dict[str, str]]:
     """
@@ -167,7 +168,7 @@ async def persist_profile_images(
         async with semaphore:
             return await download_and_upload_image(db, client, cdn_url, storage_path, supabase_url)
 
-    tasks: list[asyncio.Task] = []
+    tasks: list[asyncio.Task[str | None]] = []
 
     async with httpx.AsyncClient() as client:
         # Аватар
@@ -233,7 +234,7 @@ async def delete_blog_images(db: Client, blog_id: str) -> int:
     # Аватар сохраняем — удаляем только посты
     post_paths: list[str] = []
     for raw_file in files:
-        if not isinstance(raw_file, dict):
+        if not isinstance(raw_file, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
             continue
         name = raw_file.get("name")
         if not isinstance(name, str) or name == "avatar.jpg":

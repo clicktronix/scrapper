@@ -183,6 +183,11 @@ def build_batch_request(
     }
 
 
+# Количество профилей на чанк при загрузке изображений.
+# Ограничивает пиковую память: 1 чанк × 10 изображений × ~400 КБ ≈ 40 МБ.
+_IMAGE_CHUNK_SIZE = 10
+
+
 async def submit_batch(
     client: AsyncOpenAI,
     profiles: list[tuple[str, ScrapedProfile]],
@@ -194,67 +199,90 @@ async def submit_batch(
     profiles — список (blog_id, ScrapedProfile).
     text_only_ids — blog_id для которых не скачивать изображения (retry после refusal).
     Возвращает batch_id.
+
+    Использует chunked pipeline: профили обрабатываются чанками по _IMAGE_CHUNK_SIZE,
+    изображения скачиваются параллельно внутри чанка, JSONL пишется инкрементально.
+    Это ограничивает пиковую память: O(chunk_size × image_size) вместо O(total × image_size × 3).
     """
     if not profiles:
         raise ValueError("Cannot submit empty batch")
 
     _text_only_ids = text_only_ids or set()
-
-    # Скачиваем изображения для профилей (кроме text_only)
-    # Семафор ограничивает общее число конкурентных загрузок, чтобы не перегрузить
-    # httpx connection pool (default 100) и Supabase Storage
-    profiles_for_images = [
-        (blog_id, profile) for blog_id, profile in profiles
-        if blog_id not in _text_only_ids
-    ]
     download_semaphore = asyncio.Semaphore(10)
-    logger.info(f"[batch] Скачиваем изображения для {len(profiles_for_images)} профилей "
-                f"({len(_text_only_ids)} text-only)...")
-    image_maps_by_id: dict[str, dict[str, str]] = {}
-    async with httpx.AsyncClient() as http_client:
-        tasks = [
-            resolve_profile_images(profile, client=http_client, semaphore=download_semaphore)
-            for _, profile in profiles_for_images
-        ]
-        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
-        # Фильтруем ошибки — заменяем на пустой dict (профиль без изображений)
-        clean_results: list[dict[str, str]] = []
-        for i, r in enumerate(raw_results):
-            if isinstance(r, BaseException):
-                blog_id = profiles_for_images[i][0]
-                logger.warning(f"[batch] Ошибка загрузки изображений для профиля {blog_id}: {r}")
-                clean_results.append({})
-            else:
-                clean_results.append(r)
-        for (blog_id, _), img_map in zip(profiles_for_images, clean_results, strict=False):
-            image_maps_by_id[blog_id] = img_map
-    total_downloaded = sum(len(m) for m in image_maps_by_id.values())
-    logger.info(f"[batch] Скачано {total_downloaded} изображений для {len(profiles_for_images)} профилей")
+    total_images = 0
 
-    # Формируем JSONL в памяти (без временных файлов)
-    lines: list[str] = []
-    for blog_id, profile in profiles:
-        is_text_only = blog_id in _text_only_ids
-        image_map = image_maps_by_id.get(blog_id, {})
-        request = build_batch_request(
-            blog_id, profile, settings,
-            image_map=image_map, text_only=is_text_only,
-        )
-        lines.append(json.dumps(request, ensure_ascii=False))
-        mode = "text-only" if is_text_only else f"{len(image_map)} images"
-        logger.debug(f"[batch] Prepared request for blog {blog_id} "
-                     f"(@{profile.username}, {len(profile.medias)} publications, {mode})")
-
-    jsonl_bytes = "\n".join(lines).encode("utf-8")
-    logger.debug(f"[batch] JSONL size: {len(jsonl_bytes)} bytes, "
-                 f"model={settings.batch_model}")
-
-    # Загружаем файл в OpenAI (async)
-    file_obj = await client.files.create(
-        file=("batch.jsonl", io.BytesIO(jsonl_bytes)),
-        purpose="batch",
+    # JSONL буфер — пишем инкрементально, не накапливая промежуточные структуры
+    buffer = io.BytesIO()
+    total_profiles_with_images = sum(
+        1 for blog_id, _ in profiles if blog_id not in _text_only_ids
     )
-    logger.debug(f"[batch] File uploaded: {file_obj.id}")
+    logger.info(
+        f"[batch] Загрузка изображений для {total_profiles_with_images} профилей "
+        f"({len(_text_only_ids)} text-only, чанки по {_IMAGE_CHUNK_SIZE})..."
+    )
+
+    try:
+        async with httpx.AsyncClient() as http_client:
+            for chunk_start in range(0, len(profiles), _IMAGE_CHUNK_SIZE):
+                chunk = profiles[chunk_start:chunk_start + _IMAGE_CHUNK_SIZE]
+
+                # Параллельная загрузка изображений для чанка (кроме text_only)
+                chunk_for_images = [
+                    (blog_id, profile) for blog_id, profile in chunk
+                    if blog_id not in _text_only_ids
+                ]
+                chunk_image_maps: dict[str, dict[str, str]] = {}
+                if chunk_for_images:
+                    image_tasks = [
+                        resolve_profile_images(
+                            profile, client=http_client, semaphore=download_semaphore,
+                        )
+                        for _, profile in chunk_for_images
+                    ]
+                    raw = await asyncio.gather(*image_tasks, return_exceptions=True)
+                    for i, r in enumerate(raw):
+                        blog_id = chunk_for_images[i][0]
+                        if isinstance(r, BaseException):
+                            logger.warning(f"[batch] Ошибка загрузки изображений для {blog_id}: {r}")
+                            chunk_image_maps[blog_id] = {}
+                        else:
+                            chunk_image_maps[blog_id] = r
+                            total_images += len(r)
+
+                # Формируем JSONL строки и сразу пишем в буфер
+                for blog_id, profile in chunk:
+                    is_text_only = blog_id in _text_only_ids
+                    image_map = chunk_image_maps.get(blog_id, {})
+                    request = build_batch_request(
+                        blog_id, profile, settings,
+                        image_map=image_map, text_only=is_text_only,
+                    )
+                    buffer.write(json.dumps(request, ensure_ascii=False).encode("utf-8"))
+                    buffer.write(b"\n")
+                    mode = "text-only" if is_text_only else f"{len(image_map)} images"
+                    logger.debug(
+                        f"[batch] Prepared request for blog {blog_id} "
+                        f"(@{profile.username}, {len(profile.medias)} publications, {mode})"
+                    )
+
+                # Явно освобождаем данные изображений чанка
+                del chunk_image_maps
+
+        logger.info(
+            f"[batch] Скачано {total_images} изображений для "
+            f"{total_profiles_with_images} профилей"
+        )
+        logger.debug(f"[batch] JSONL size: {buffer.tell()} bytes, model={settings.batch_model}")
+
+        # Загружаем файл в OpenAI
+        buffer.seek(0)
+        file_obj = await client.files.create(
+            file=("batch.jsonl", buffer),
+            purpose="batch",
+        )
+        logger.debug(f"[batch] File uploaded: {file_obj.id}")
+    finally:
+        buffer.close()
 
     # Создаём батч
     batch = await client.batches.create(

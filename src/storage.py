@@ -1,6 +1,7 @@
 """Supabase Storage для хранения Instagram-сессий."""
 import json
 import re
+from typing import Any
 
 from loguru import logger
 from supabase import Client
@@ -19,7 +20,7 @@ def _build_session_file_path(account_name: str) -> str | None:
     return f"{account_name}.json"
 
 
-async def load_session(db: Client, account_name: str) -> dict | None:
+async def load_session(db: Client, account_name: str) -> dict[str, Any] | None:
     """
     Загрузить сессию из Supabase Storage.
     Возвращает dict для cl.load_settings() или None.
@@ -43,7 +44,7 @@ async def load_session(db: Client, account_name: str) -> dict | None:
         return None
 
 
-async def save_session(db: Client, account_name: str, settings: dict) -> None:
+async def save_session(db: Client, account_name: str, settings: dict[str, Any]) -> None:
     """Сохранить сессию в Supabase Storage (перезаписать если есть)."""
     safe_path = _build_session_file_path(account_name)
     if safe_path is None:

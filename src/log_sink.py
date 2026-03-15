@@ -1,14 +1,18 @@
 """Loguru sink для записи WARNING+ логов в Supabase."""
 
+from collections.abc import Callable
+from typing import Any
+
+from loguru import logger as _fallback_logger
 from supabase import Client
 
 from src.database import sanitize_error
 
 
-def create_supabase_sink(db: Client):
+def create_supabase_sink(db: Client) -> Callable[[Any], None]:
     """Фабрика: вернуть sink-функцию, привязанную к db-клиенту."""
 
-    def sink(message) -> None:
+    def sink(message: Any) -> None:
         record = message.record
         if record["level"].no < 30:  # WARNING = 30
             return
@@ -25,7 +29,7 @@ def create_supabase_sink(db: Client):
                 "module": record["name"],
                 "message": sanitized_msg,
             }).execute()
-        except Exception:
-            pass  # Ошибка логирования не должна ронять приложение
+        except Exception as e:
+            _fallback_logger.opt(depth=1).trace(f"Supabase log sink error: {e}")
 
     return sink

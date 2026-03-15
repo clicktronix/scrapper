@@ -2,6 +2,7 @@
 import asyncio
 import signal
 import sys
+from typing import Any
 
 import uvicorn
 from loguru import logger
@@ -80,12 +81,13 @@ async def main() -> None:
 
     # APScheduler — крон-задачи (re-scrape, poll_batches, recover)
     scheduler = create_scheduler(db, settings, openai_client)
+    app.state.scheduler = scheduler
     scheduler.start()
     logger.info("Scheduler started")
 
     logger.info(f"API server starting on port {settings.scraper_port}")
 
-    async def _run_with_shutdown(coro, shutdown_ev, name: str):
+    async def _run_with_shutdown(coro: Any, shutdown_ev: asyncio.Event, name: str) -> None:
         """Запускает корутину, при ошибке сигнализирует shutdown."""
         try:
             await coro

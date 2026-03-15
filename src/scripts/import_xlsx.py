@@ -2,6 +2,7 @@
 import argparse
 import asyncio
 import os
+from typing import Any
 
 import httpx
 import pandas as pd
@@ -29,7 +30,7 @@ async def send_batch(
     base_url: str,
     api_key: str,
     usernames: list[str],
-) -> dict:
+) -> dict[str, Any]:
     """Отправить батч username-ов на API."""
     resp = await client.post(
         f"{base_url}/api/tasks/pre_filter",

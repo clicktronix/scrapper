@@ -1,14 +1,24 @@
 """Типы для результатов БД — TypedDict вместо dict[str, Any]."""
 
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
+
+# Допустимые значения из DB CHECK constraints
+type TaskType = Literal["full_scrape", "ai_analysis", "discover", "pre_filter"]
+type TaskStatus = Literal["pending", "running", "done", "failed"]
+type ScrapeStatus = Literal[
+    "pending", "scraping", "analyzing", "ai_analyzed",
+    "active", "failed", "private", "deleted", "deactivated",
+    "ai_refused",
+]
+type ErTrend = Literal["growing", "stable", "declining"]
 
 
 class TaskRecord(TypedDict):
     """Запись задачи из scrape_tasks."""
 
     id: str
-    task_type: str
-    status: str
+    task_type: TaskType
+    status: TaskStatus
     blog_id: str | None
     priority: int
     attempts: int

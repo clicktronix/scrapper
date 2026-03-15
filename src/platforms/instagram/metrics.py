@@ -1,9 +1,9 @@
 """Расчёт метрик Instagram-профиля: ER, тренд, частота публикаций."""
 import re
 import statistics
-from typing import Literal
 
 from src.models.blog import ScrapedPost
+from src.models.db_types import ErTrend
 
 
 def calculate_er(posts: list[ScrapedPost], follower_count: int) -> float | None:
@@ -15,12 +15,14 @@ def calculate_er(posts: list[ScrapedPost], follower_count: int) -> float | None:
         return None
     engagements = [p.like_count + p.comment_count for p in posts]
     median_engagement = statistics.median(engagements)
-    return round(median_engagement / follower_count * 100, 2)
+    er = round(median_engagement / follower_count * 100, 2)
+    # Clamp: БД хранит er_reels как numeric(5,2), макс 999.99
+    return min(er, 999.99)
 
 
 def calculate_er_trend(
     posts: list[ScrapedPost], follower_count: int
-) -> Literal["growing", "stable", "declining"] | None:
+) -> ErTrend | None:
     """
     Сравниваем ER первой половины (новые) vs второй (старые).
     Разница > 20% → 'growing' или 'declining', иначе 'stable'.
@@ -64,7 +66,9 @@ def calculate_posts_per_week(posts: list[ScrapedPost]) -> float | None:
 
     if days == 0:
         return None
-    return round(len(posts) / (days / 7), 2)
+    ppw = round(len(posts) / (days / 7), 2)
+    # Clamp: БД хранит posts_per_week как numeric(5,2), макс 999.99
+    return min(ppw, 999.99)
 
 
 def assign_engagement_rates(posts: list[ScrapedPost], follower_count: int) -> None:

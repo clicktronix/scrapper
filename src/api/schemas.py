@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.models.db_types import TaskStatus, TaskType
+
 # Instagram username: латинские буквы, цифры, точка и подчёркивание
 _USERNAME_RE = re.compile(r"^[a-z0-9._]+$")
 # Хештег: буквы (вкл. кириллицу), цифры, подчёркивание
@@ -110,8 +112,8 @@ class TaskResponse(BaseModel):
 
     id: str
     blog_id: str | None = None
-    task_type: Literal["full_scrape", "ai_analysis", "discover", "pre_filter"]
-    status: Literal["pending", "running", "done", "failed"]
+    task_type: TaskType
+    status: TaskStatus
     priority: int
     attempts: int = 0
     error_message: str | None = None
@@ -137,6 +139,13 @@ class RetryResponse(BaseModel):
     status: Literal["retrying"]
 
 
+class QueueDepthItem(BaseModel):
+    """Глубина очереди задач по одному task_type."""
+
+    pending: int = 0
+    running: int = 0
+
+
 class HealthResponse(BaseModel):
     """Ответ healthcheck."""
 
@@ -145,3 +154,21 @@ class HealthResponse(BaseModel):
     accounts_available: int
     tasks_running: int
     tasks_pending: int
+    queue_depth: dict[str, QueueDepthItem] | None = None
+
+
+class SchedulerJobStatus(BaseModel):
+    """Статус одной cron/interval-задачи планировщика."""
+
+    id: str
+    name: str
+    interval: str
+    last_run_at: str | None = None
+    next_run_at: str | None = None
+    status: Literal["ok", "unknown"] = "unknown"
+
+
+class SchedulerStatusResponse(BaseModel):
+    """Ответ GET /api/scheduler/status."""
+
+    jobs: list[SchedulerJobStatus]

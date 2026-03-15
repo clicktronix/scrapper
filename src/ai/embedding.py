@@ -114,8 +114,15 @@ async def generate_embedding(
     except openai.AuthenticationError:
         logger.error("[embedding] Ошибка аутентификации OpenAI — проверьте OPENAI_API_KEY")
         raise
-    except (openai.RateLimitError, openai.APITimeoutError) as e:
-        logger.warning(f"[embedding] Транзиентная ошибка OpenAI: {e}")
+    except openai.RateLimitError as e:
+        # insufficient_quota — квота исчерпана, ретрай бессмысленен
+        if "insufficient_quota" in str(e):
+            logger.error("[embedding] Квота OpenAI исчерпана — пополните баланс на platform.openai.com")
+            raise
+        logger.warning(f"[embedding] Транзиентная ошибка OpenAI (rate limit): {e}")
+        return None
+    except openai.APITimeoutError as e:
+        logger.warning(f"[embedding] Транзиентная ошибка OpenAI (timeout): {e}")
         return None
     except Exception as e:
         logger.error(f"[embedding] Ошибка генерации embedding: {e}")
