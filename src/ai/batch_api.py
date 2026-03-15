@@ -2,7 +2,7 @@
 import asyncio
 import io
 import json
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from loguru import logger
@@ -39,12 +39,15 @@ def _extract_content_text(message: dict[str, Any]) -> str | None:
 
     if isinstance(content, list):
         text_chunks: list[str] = []
-        for part in content:
+        # Явно приводим к list[Any], чтобы pyright знал тип элементов
+        content_list = cast(list[Any], content)
+        for part in content_list:
             if not isinstance(part, dict):
                 continue
-            if part.get("type") != "text":
+            part_dict = cast(dict[str, Any], part)
+            if part_dict.get("type") != "text":
                 continue
-            text = part.get("text")
+            text = part_dict.get("text")
             if isinstance(text, str):
                 text_chunks.append(text)
         normalized = "".join(text_chunks).strip()
@@ -78,18 +81,42 @@ def _strip_null_bytes(text: str) -> str:
     return text.replace("\x00", "")
 
 
+_MAX_TAGS = 40
+
+
+def _truncate_tags(data: dict[str, Any]) -> dict[str, Any]:
+    """Обрезать tags до _MAX_TAGS — OpenAI strict mode не поддерживает maxItems."""
+    tags = data.get("tags")
+    if isinstance(tags, list):
+        # Явное приведение, чтобы pyright понимал тип элементов списка
+        tags_list = cast(list[Any], tags)
+        if len(tags_list) > _MAX_TAGS:
+            data["tags"] = tags_list[:_MAX_TAGS]
+    return data
+
+
 def _parse_ai_insights(content_text: str) -> AIInsights:
     """Распарсить structured output с fallback для слегка шумных ответов."""
     # PostgreSQL не принимает \u0000 в text/jsonb полях
     content_text = _strip_null_bytes(content_text)
     try:
         return AIInsights.model_validate_json(content_text)
-    except ValidationError:
+    except ValidationError as first_err:
         cleaned = _cleanup_json_payload(content_text)
         if cleaned is None:
             raise
-        parsed = json.loads(cleaned)
-        return AIInsights.model_validate(parsed)
+        try:
+            parsed = json.loads(cleaned)
+            _truncate_tags(parsed)
+            return AIInsights.model_validate(parsed)
+        except ValidationError as second_err:
+            # Логируем детали: какие поля не прошли валидацию
+            for err in second_err.errors():
+                logger.warning(
+                    f"[parse_ai] Validation error: field={'.'.join(str(x) for x in err.get('loc', []))}, "
+                    f"type={err.get('type')}, msg={err.get('msg')}"
+                )
+            raise second_err from first_err
 
 
 _UNSUPPORTED_STRICT_KEYS = frozenset({
@@ -113,10 +140,13 @@ def _make_strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
     # Обработать $defs (вложенные модели)
     if "$defs" in schema:
-        schema["$defs"] = {
-            name: _make_strict_schema(defn)
-            for name, defn in schema["$defs"].items()
-        }
+        defs_raw: dict[str, Any] = cast(dict[str, Any], schema["$defs"])
+        processed_defs: dict[str, dict[str, Any]] = {}
+        for def_name, def_value in defs_raw.items():
+            # Явное приведение к dict[str, Any] — значения $defs всегда объекты схемы
+            def_schema: dict[str, Any] = cast(dict[str, Any], def_value)
+            processed_defs[def_name] = _make_strict_schema(def_schema)
+        schema["$defs"] = processed_defs
 
     # Проставить required и additionalProperties для объектов
     if "properties" in schema:
@@ -133,7 +163,9 @@ def _make_strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
     # Обработать items (массивы)
     if "items" in schema and isinstance(schema["items"], dict):
-        schema["items"] = _make_strict_schema(schema["items"])
+        # Явное приведение — schema["items"] имеет тип Any из dict[str, Any]
+        items_schema: dict[str, Any] = cast(dict[str, Any], schema["items"])
+        schema["items"] = _make_strict_schema(items_schema)
 
     # Обработать anyOf (Union типы)
     if "anyOf" in schema:
@@ -327,18 +359,22 @@ async def poll_batch(client: AsyncOpenAI, batch_id: str) -> dict[str, Any]:
                 continue
             output_line_count += 1
             try:
-                data = json.loads(line)
+                data_raw = json.loads(line)
             except json.JSONDecodeError as e:
                 logger.error(f"Malformed JSONL line in output file: {e}")
                 continue
-            custom_id = data.get("custom_id")
+            if not isinstance(data_raw, dict):
+                logger.error(f"Unexpected JSONL line type: {type(data_raw).__name__}, skipping")
+                continue
+            data: dict[str, Any] = cast(dict[str, Any], data_raw)
+            custom_id = str(data.get("custom_id", ""))
             if not custom_id:
                 logger.error("JSONL line missing custom_id, skipping")
                 continue
 
             # Проверка на ошибку/refusal (response может быть null)
-            response = data.get("response") or {}
-            status_code = response.get("status_code")
+            response: dict[str, Any] = cast(dict[str, Any], data.get("response")) or {}
+            status_code: int | None = cast(int | None, response.get("status_code"))
 
             # status_code=0 или None — внутренний сбой OpenAI (известный баг)
             if status_code is None or status_code == 0:
@@ -349,8 +385,8 @@ async def poll_batch(client: AsyncOpenAI, batch_id: str) -> dict[str, Any]:
                 results[custom_id] = None
                 continue
 
-            if isinstance(status_code, int) and status_code >= 400:
-                response_body = response.get("body", {})
+            if status_code >= 400:
+                response_body: dict[str, Any] = cast(dict[str, Any], response.get("body")) or {}
                 logger.error(
                     f"Batch API response error for {custom_id}: "
                     f"status={status_code}, body={json.dumps(response_body, ensure_ascii=False)[:500]}"
@@ -358,20 +394,20 @@ async def poll_batch(client: AsyncOpenAI, batch_id: str) -> dict[str, Any]:
                 results[custom_id] = None
                 continue
 
-            response_body = response.get("body", {})
-            choices = response_body.get("choices", [])
+            response_body = cast(dict[str, Any], response.get("body")) or {}
+            choices: list[Any] = cast(list[Any], response_body.get("choices")) or []
 
             if not choices:
                 logger.warning(f"No choices for {custom_id}")
                 results[custom_id] = None
                 continue
 
-            message = choices[0].get("message", {})
+            message: dict[str, Any] = cast(dict[str, Any], choices[0].get("message")) or {}
 
             # Проверка refusal (content filter)
             if message.get("refusal"):
                 logger.warning(f"AI refusal for {custom_id}: {message['refusal']}")
-                results[custom_id] = ("refusal", message["refusal"])
+                results[custom_id] = ("refusal", str(message["refusal"]))
                 continue
 
             # Парсинг structured output
@@ -397,23 +433,27 @@ async def poll_batch(client: AsyncOpenAI, batch_id: str) -> dict[str, Any]:
                 continue
             error_line_count += 1
             try:
-                data = json.loads(line)
+                err_data_raw = json.loads(line)
             except json.JSONDecodeError as e:
                 logger.error(f"Malformed JSONL line in error file: {e}")
                 continue
-            custom_id = data.get("custom_id")
+            if not isinstance(err_data_raw, dict):
+                logger.error(f"Unexpected error JSONL line type: {type(err_data_raw).__name__}, skipping")
+                continue
+            err_data: dict[str, Any] = cast(dict[str, Any], err_data_raw)
+            custom_id = str(err_data.get("custom_id", ""))
             if not custom_id:
                 logger.error("Error JSONL line missing custom_id, skipping")
                 continue
-            error_info = data.get("error") or {}
-            response_info = data.get("response") or {}
+            error_info: dict[str, Any] = cast(dict[str, Any], err_data.get("error")) or {}
+            response_info: dict[str, Any] = cast(dict[str, Any], err_data.get("response")) or {}
             logger.error(
                 f"[batch] Error file entry for {custom_id}: "
                 f"error_code={error_info.get('code')}, "
                 f"error_message={error_info.get('message')}, "
                 f"status_code={response_info.get('status_code')}, "
                 f"request_id={response_info.get('request_id')}, "
-                f"raw={json.dumps(data, ensure_ascii=False)[:1000]}"
+                f"raw={json.dumps(err_data, ensure_ascii=False)[:1000]}"
             )
             results[custom_id] = None
 

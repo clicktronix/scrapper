@@ -1,7 +1,7 @@
 """Supabase Storage для хранения Instagram-сессий."""
 import json
 import re
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 from supabase import Client
@@ -38,7 +38,7 @@ async def load_session(db: Client, account_name: str) -> dict[str, Any] | None:
         if not isinstance(parsed, dict):
             logger.debug(f"Invalid session format for {account_name}: expected dict, got {type(parsed).__name__}")
             return None
-        return parsed
+        return cast(dict[str, Any], parsed)
     except Exception as e:
         logger.debug(f"No session for {account_name}: {e}")
         return None

@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from instagrapi.exceptions import UserNotFound
 from loguru import logger
@@ -24,10 +24,13 @@ def _extract_inserted_id(data: Any) -> str | None:
     """Достать id из ответа Supabase insert()."""
     if not isinstance(data, list) or not data:
         return None
-    first = data[0]
-    if not isinstance(first, dict):
+    # cast нужен: data имеет тип Any, индексирование возвращает Unknown
+    raw_first: Any = cast(list[Any], data)[0]
+    if not isinstance(raw_first, dict):
         return None
-    row_id = first.get("id")
+    # Явное приведение после isinstance-проверки: pyright не сужает тип из Any
+    first: dict[str, Any] = cast(dict[str, Any], raw_first)
+    row_id: str | None = cast(str | None, first.get("id"))
     return row_id if isinstance(row_id, str) else None
 
 
@@ -250,10 +253,17 @@ async def handle_pre_filter(
         return
 
     # Оба endpoint возвращают [medias_list, cursor]
-    raw_posts: list[dict[str, Any]] = posts_result[0] if isinstance(posts_result, list) and posts_result else []
-    raw_clips: list[dict[str, Any]] = clips_result[0] if isinstance(clips_result, list) and clips_result else []
+    # cast нужен: posts_result/clips_result имеют тип Any, индексирование даёт Unknown
+    raw_posts: list[dict[str, Any]] = cast(
+        list[dict[str, Any]],
+        posts_result[0] if isinstance(posts_result, list) and posts_result else [],
+    )
+    raw_clips: list[dict[str, Any]] = cast(
+        list[dict[str, Any]],
+        clips_result[0] if isinstance(clips_result, list) and clips_result else [],
+    )
     # Объединяем посты и рилсы для проверки
-    all_medias = raw_posts + raw_clips
+    all_medias: list[dict[str, Any]] = raw_posts + raw_clips
 
     # Критерий 2: неактивный аккаунт (нет контента или последний пост/рилс слишком старый)
     if not all_medias:

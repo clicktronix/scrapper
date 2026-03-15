@@ -1,5 +1,6 @@
 """Точка входа скрапера — инициализация и запуск API + воркера."""
 import asyncio
+import concurrent.futures
 import signal
 import sys
 from typing import Any
@@ -30,6 +31,11 @@ async def main() -> None:
         logger.add("logs/scraper.log", rotation="100 MB", retention="7 days")
 
     logger.info("Starting scraper worker")
+
+    # Ограниченный thread pool для asyncio.to_thread (Supabase, instagrapi).
+    # Без этого при пиковой нагрузке OS может отказать в создании тредов (EAGAIN).
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
+    asyncio.get_running_loop().set_default_executor(executor)
 
     # Supabase
     db = create_client(settings.supabase_url, settings.supabase_service_key.get_secret_value())

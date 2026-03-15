@@ -1,6 +1,6 @@
 """Хелпер для построения blog_insert_data из сырого HikerAPI user dict."""
 
-from typing import Any
+from typing import Any, cast
 
 
 def build_blog_data_from_user(
@@ -49,16 +49,18 @@ def build_blog_data_from_user(
     if user.get("external_url"):
         data["external_url"] = user["external_url"]
     # Bio links
-    raw_bio_links = user.get("bio_links") or []
+    raw_bio_links: list[Any] = cast(list[Any], user.get("bio_links") or [])
     if raw_bio_links:
-        bio_links = []
+        bio_links: list[dict[str, Any]] = []
         for link in raw_bio_links:
-            if isinstance(link, dict) and link.get("url"):
-                bio_links.append({
-                    "url": str(link["url"]),
-                    "title": link.get("title") or None,
-                    "link_type": link.get("link_type") or None,
-                })
+            if isinstance(link, dict):
+                link_dict = cast(dict[str, Any], link)
+                if link_dict.get("url"):
+                    bio_links.append({
+                        "url": str(link_dict["url"]),
+                        "title": link_dict.get("title") or None,
+                        "link_type": link_dict.get("link_type") or None,
+                    })
         if bio_links:
             data["bio_links"] = bio_links
     return data

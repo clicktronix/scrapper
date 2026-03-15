@@ -2,7 +2,7 @@
 import argparse
 import asyncio
 import os
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pandas as pd
@@ -15,7 +15,8 @@ def extract_usernames(df: pd.DataFrame) -> list[str]:
     """Извлечь уникальные username-ы из DataFrame."""
     result: list[str] = []
     seen: set[str] = set()
-    for raw in df["username"]:
+    username_col = cast(Any, df["username"])
+    for raw in list(username_col):
         if not isinstance(raw, str) or not raw.strip():
             continue
         name = raw.strip().lower()
@@ -51,7 +52,9 @@ async def run(
 ) -> None:
     """Читает xlsx → шлёт батчами на API."""
     logger.info(f"Читаем {file_path}...")
-    df = pd.read_excel(file_path)
+    # pandas stubs имеют частично неизвестные overloads — используем Any для вызова
+    pd_any = cast(Any, pd)
+    df: pd.DataFrame = pd_any.read_excel(file_path)
     usernames = extract_usernames(df)
     logger.info(f"Найдено {len(usernames)} уникальных username-ов")
 

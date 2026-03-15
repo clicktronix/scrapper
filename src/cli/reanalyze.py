@@ -23,7 +23,7 @@ def _as_rows(data: Any) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if not isinstance(data, list):
         return rows
-    for item in data:
+    for item in cast(list[Any], data):
         if isinstance(item, dict):
             rows.append(cast(dict[str, Any], item))
     return rows

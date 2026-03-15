@@ -1,6 +1,6 @@
 """Скрапинг Instagram-профилей через HikerAPI (SaaS-бэкенд)."""
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from hikerapi import Client
@@ -40,8 +40,10 @@ def _pick_image_url(candidate: Any) -> str | None:
     if not isinstance(candidate, dict):
         return None
 
+    # Приводим к dict[str, Any] для корректной типизации
+    candidate_dict = cast(dict[str, Any], candidate)
     for key in ("url", "thumbnail_url", "display_url", "src"):
-        value = candidate.get(key)
+        value: Any = candidate_dict.get(key)
         if isinstance(value, str) and value:
             return value
     return None
@@ -53,23 +55,27 @@ def _extract_thumbnail_url(media: dict[str, Any]) -> str | None:
     if isinstance(direct, str) and direct:
         return direct
 
-    image_versions2 = media.get("image_versions2")
+    image_versions2: Any = media.get("image_versions2")
     if isinstance(image_versions2, dict):
-        candidates = image_versions2.get("candidates")
+        image_versions2_dict = cast(dict[str, Any], image_versions2)
+        candidates: Any = image_versions2_dict.get("candidates")
         if isinstance(candidates, list):
-            for candidate in candidates:
+            candidates_list = cast(list[Any], candidates)
+            for candidate in candidates_list:
                 url = _pick_image_url(candidate)
                 if url:
                     return url
 
-    video_versions = media.get("video_versions")
+    video_versions: Any = media.get("video_versions")
     if isinstance(video_versions, list):
-        for version in video_versions:
+        video_versions_list = cast(list[Any], video_versions)
+        for version in video_versions_list:
             if not isinstance(version, dict):
                 continue
+            version_dict = cast(dict[str, Any], version)
             # Не используем video url (обычно mp4), только явный image-preview.
             for key in ("thumbnail_url", "poster_url", "image_url", "preview_url"):
-                value = version.get(key)
+                value: Any = version_dict.get(key)
                 if isinstance(value, str) and value:
                     return value
 
@@ -81,23 +87,29 @@ def _hiker_media_to_post(media: dict[str, Any]) -> ScrapedPost:
     caption = media.get("caption_text") or ""
 
     # Спонсоры
-    sponsor_tags = media.get("sponsor_tags") or []
+    sponsor_tags_raw: Any = media.get("sponsor_tags") or []
+    sponsor_tags = cast(list[Any], sponsor_tags_raw)
     sponsor_usernames: list[str] = [
-        s["username"] for s in sponsor_tags
-        if isinstance(s, dict) and isinstance(s.get("username"), str)
+        cast(dict[str, Any], s)["username"] for s in sponsor_tags
+        if isinstance(s, dict) and isinstance(cast(dict[str, Any], s).get("username"), str)
     ]
 
     # Локация
-    location = media.get("location")
-    location_name = None
-    location_city = None
-    location_lat = None
-    location_lng = None
-    if isinstance(location, dict):
-        location_name = location.get("name")
-        location_city = location.get("city")
-        location_lat = location.get("lat")
-        location_lng = location.get("lng")
+    location_raw: Any = media.get("location")
+    location_name: str | None = None
+    location_city: str | None = None
+    location_lat: float | None = None
+    location_lng: float | None = None
+    if isinstance(location_raw, dict):
+        location = cast(dict[str, Any], location_raw)
+        location_name_val: Any = location.get("name")
+        location_city_val: Any = location.get("city")
+        location_lat_val: Any = location.get("lat")
+        location_lng_val: Any = location.get("lng")
+        location_name = str(location_name_val) if location_name_val is not None else None
+        location_city = str(location_city_val) if location_city_val is not None else None
+        location_lat = float(location_lat_val) if location_lat_val is not None else None
+        location_lng = float(location_lng_val) if location_lng_val is not None else None
 
     media_type = media.get("media_type", 1)
 
@@ -106,11 +118,16 @@ def _hiker_media_to_post(media: dict[str, Any]) -> ScrapedPost:
 
     # Usertags
     usertags_list: list[str] = []
-    for ut in media.get("usertags") or []:
+    usertags_raw: Any = media.get("usertags") or []
+    for ut in cast(list[Any], usertags_raw):
         if isinstance(ut, dict):
-            user = ut.get("user")
-            if isinstance(user, dict) and user.get("username"):
-                usertags_list.append(user["username"])
+            ut_dict = cast(dict[str, Any], ut)
+            user_val: Any = ut_dict.get("user")
+            if isinstance(user_val, dict):
+                user_dict = cast(dict[str, Any], user_val)
+                username_val: Any = user_dict.get("username")
+                if username_val:
+                    usertags_list.append(str(username_val))
 
     # Accessibility caption
     accessibility_caption = media.get("accessibility_caption") or None
@@ -241,13 +258,44 @@ class HikerInstagramScraper:
         self.cl = SafeHikerClient(token=token)
         self.settings = settings
 
+    # --- Sync-обёртки для HikerAPI методов с явными типами ---
+    # Необходимы, так как hikerapi не имеет полных type stubs.
+    # cast(Any, self.cl) скрывает нетипизированные члены от pyright.
+
+    def _call_user_by_username_v2(self, username: str) -> dict[str, Any]:
+        """Sync-вызов HikerAPI: получить данные пользователя по username."""
+        cl: Any = self.cl
+        return cast(dict[str, Any], cl.user_by_username_v2(username))
+
+    def _call_user_medias_chunk_v1(self, user_id: str) -> list[Any]:
+        """Sync-вызов HikerAPI: получить chunk медиа пользователя."""
+        cl: Any = self.cl
+        return cast(list[Any], cl.user_medias_chunk_v1(user_id))
+
+    def _call_user_highlights(self, user_id: str, amount: int) -> list[dict[str, Any]]:
+        """Sync-вызов HikerAPI: получить хайлайты пользователя."""
+        cl: Any = self.cl
+        return cast(list[dict[str, Any]], cl.user_highlights(user_id, amount=amount))
+
+    def _call_highlight_by_id_v2(self, pk: str) -> dict[str, Any]:
+        """Sync-вызов HikerAPI: получить детали хайлайта по pk."""
+        cl: Any = self.cl
+        return cast(dict[str, Any], cl.highlight_by_id_v2(pk))
+
+    def _call_media_comments_chunk_v1(self, media_id: str) -> list[Any]:
+        """Sync-вызов HikerAPI: получить chunk комментариев к медиа."""
+        cl: Any = self.cl
+        return cast(list[Any], cl.media_comments_chunk_v1(media_id))
+
     async def scrape_profile(self, username: str) -> ScrapedProfile:
         """Полный скрапинг Instagram-профиля через HikerAPI."""
         logger.info(f"[HikerAPI] Scraping profile @{username}")
 
         # 1. Информация о пользователе (sync → thread)
-        response = await asyncio.to_thread(self.cl.user_by_username_v2, username)
-        user = response.get("user", {})
+        response_raw: dict[str, Any] = await asyncio.to_thread(
+            self._call_user_by_username_v2, username
+        )
+        user: dict[str, Any] = cast(dict[str, Any], response_raw.get("user", {}))
 
         if not user or not user.get("pk"):
             msg = f"@{username} not found via HikerAPI"
@@ -259,25 +307,37 @@ class HikerInstagramScraper:
         user_id = str(user["pk"])
 
         # 2+3. Медиа и хайлайты параллельно (sync → thread)
-        result, raw_highlights = await asyncio.gather(
-            asyncio.to_thread(self.cl.user_medias_chunk_v1, user_id),
+        medias_result_raw: list[Any]
+        raw_highlights: list[dict[str, Any]]
+        medias_result_raw, raw_highlights = await asyncio.gather(
+            asyncio.to_thread(self._call_user_medias_chunk_v1, user_id),
             asyncio.to_thread(
-                self.cl.user_highlights, user_id, amount=self.settings.highlights_to_fetch
+                self._call_user_highlights, user_id, self.settings.highlights_to_fetch
             ),
         )
-        raw_medias: list[dict[str, Any]] = result[0] if isinstance(result, list) and result else []
+        # user_medias_chunk_v1 возвращает [medias_list, next_cursor]
+        raw_medias: list[dict[str, Any]] = (
+            cast(list[dict[str, Any]], medias_result_raw[0])
+            if medias_result_raw
+            else []
+        )
+
         highlights: list[ScrapedHighlight] = []
         for hl in raw_highlights[: self.settings.highlights_to_fetch]:
             try:
                 hl_pk = str(hl.get("pk", ""))
                 # highlight_by_id_v2 принимает pk без prefix 'highlight:'
                 hl_pk_clean = hl_pk.replace("highlight:", "")
-                detail = await asyncio.to_thread(self.cl.highlight_by_id_v2, hl_pk_clean)
+                detail_raw: dict[str, Any] = await asyncio.to_thread(
+                    self._call_highlight_by_id_v2, hl_pk_clean
+                )
                 # Структура: response.reels.{highlight:pk}.items
-                reels_data = detail.get("response", {}).get("reels", {})
+                response_part = cast(dict[str, Any], detail_raw.get("response", {}))
+                reels_data = cast(dict[str, Any], response_part.get("reels", {}))
                 hl_items: list[dict[str, Any]] = []
-                for reel_data in reels_data.values():
-                    hl_items = reel_data.get("items", [])
+                for reel_data_raw in reels_data.values():
+                    reel_data = cast(dict[str, Any], reel_data_raw)
+                    hl_items = cast(list[dict[str, Any]], reel_data.get("items", []))
                     break  # берём первый (единственный) reel
                 highlights.append(_hiker_highlight_to_scraped(hl, hl_items))
             except Exception as e:
@@ -292,21 +352,24 @@ class HikerInstagramScraper:
 
         for post in posts_for_comments:
             try:
-                raw_comments = await asyncio.to_thread(
-                    self.cl.media_comments_chunk_v1, post.platform_id
+                raw_comments_raw: list[Any] = await asyncio.to_thread(
+                    self._call_media_comments_chunk_v1, post.platform_id
                 )
                 # media_comments_chunk_v1 возвращает [comments_list, max_id, can_support_threading]
-                if isinstance(raw_comments, list) and raw_comments and isinstance(raw_comments[0], list):
-                    comment_items = raw_comments[0]
+                comment_items: list[Any]
+                if raw_comments_raw and isinstance(raw_comments_raw[0], list):
+                    comment_items = cast(list[Any], raw_comments_raw[0])
                 else:
-                    comment_items = raw_comments or []
+                    comment_items = list(raw_comments_raw) if raw_comments_raw else []
                 comments: list[ScrapedComment] = []
                 for c in comment_items[:self.settings.comments_to_fetch]:
                     if not isinstance(c, dict):
                         continue
-                    text = c.get("text", "").strip()
-                    comment_user = c.get("user") or {}
-                    uname = comment_user.get("username", "")
+                    c_dict = cast(dict[str, Any], c)
+                    text: str = str(c_dict.get("text", "")).strip()
+                    comment_user_raw: Any = c_dict.get("user") or {}
+                    comment_user = cast(dict[str, Any], comment_user_raw)
+                    uname: str = str(comment_user.get("username", ""))
                     if text and uname:
                         comments.append(ScrapedComment(username=uname, text=text))
                 post.top_comments = comments
@@ -317,41 +380,63 @@ class HikerInstagramScraper:
         reels_for_er = [p for p in medias_mapped if p.media_type == 2 and p.product_type == "clips"]
 
         # Вычислить engagement_rate для всех медиа
-        follower_count = user.get("follower_count", 0)
+        follower_count: int = int(user.get("follower_count") or 0)
         assign_engagement_rates(medias_mapped, follower_count)
 
         # Bio links
         bio_links: list[BioLink] = []
-        for link in user.get("bio_links") or []:
-            if isinstance(link, dict):
-                url = link.get("url")
-                if url:
+        bio_links_raw: Any = user.get("bio_links") or []
+        for link_raw in cast(list[Any], bio_links_raw):
+            if isinstance(link_raw, dict):
+                link = cast(dict[str, Any], link_raw)
+                url_val: Any = link.get("url")
+                if url_val:
+                    title_val: Any = link.get("title")
+                    link_type_val: Any = link.get("link_type")
                     bio_links.append(BioLink(
-                        url=str(url),
-                        title=link.get("title") or None,
-                        link_type=link.get("link_type") or None,
+                        url=str(url_val),
+                        title=str(title_val) if title_val is not None else None,
+                        link_type=str(link_type_val) if link_type_val is not None else None,
                     ))
+
+        # Явно типизируем значения из user dict для ScrapedProfile
+        username_val: Any = user.get("username", username)
+        full_name_val: Any = user.get("full_name") or ""
+        biography_val: Any = user.get("biography") or ""
+        external_url_val: Any = user.get("external_url") or None
+        following_count_val: Any = user.get("following_count", 0)
+        media_count_val: Any = user.get("media_count", 0)
+        is_verified_val: Any = user.get("is_verified", False)
+        is_business_val: Any = user.get("is_business", False)
+        business_category_val: Any = user.get("business_category_name") or user.get("category_name")
+        account_type_val: Any = user.get("account_type")
+        public_email_val: Any = user.get("public_email") or None
+        contact_phone_val: Any = user.get("contact_phone_number") or None
+        phone_country_code_val: Any = user.get("public_phone_country_code") or None
+        city_name_val: Any = user.get("city_name") or None
+        address_street_val: Any = user.get("address_street") or None
+        profile_pic_url_val: Any = user.get("profile_pic_url")
 
         profile = ScrapedProfile(
             platform_id=user_id,
-            username=user.get("username", username),
-            full_name=user.get("full_name") or "",
-            biography=user.get("biography") or "",
-            external_url=user.get("external_url") or None,
+            username=str(username_val),
+            full_name=str(full_name_val),
+            biography=str(biography_val),
+            external_url=str(external_url_val) if external_url_val is not None else None,
             bio_links=bio_links,
             follower_count=follower_count,
-            following_count=user.get("following_count", 0),
-            media_count=user.get("media_count", 0),
-            is_verified=user.get("is_verified", False),
-            is_business=user.get("is_business", False),
-            business_category=user.get("business_category_name") or user.get("category_name"),
-            account_type=user.get("account_type"),
-            public_email=user.get("public_email") or None,
-            contact_phone_number=user.get("contact_phone_number") or None,
-            public_phone_country_code=user.get("public_phone_country_code") or None,
-            city_name=user.get("city_name") or None,
-            address_street=user.get("address_street") or None,
-            profile_pic_url=user.get("profile_pic_url"),
+            following_count=int(following_count_val),
+            media_count=int(media_count_val),
+            is_verified=bool(is_verified_val),
+            is_business=bool(is_business_val),
+            business_category=str(business_category_val) if business_category_val is not None else None,
+            account_type=int(account_type_val) if account_type_val is not None else None,
+            public_email=str(public_email_val) if public_email_val is not None else None,
+            contact_phone_number=str(contact_phone_val) if contact_phone_val is not None else None,
+            public_phone_country_code=str(phone_country_code_val) if phone_country_code_val is not None else None,
+            city_name=str(city_name_val) if city_name_val is not None else None,
+            address_street=str(address_street_val) if address_street_val is not None else None,
+            profile_pic_url=str(profile_pic_url_val) if profile_pic_url_val is not None else None,
             medias=medias_mapped,
             highlights=highlights,
             avg_er=calculate_er(medias_mapped, follower_count),

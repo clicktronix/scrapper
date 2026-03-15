@@ -1,5 +1,5 @@
 """Скрапинг Instagram-профилей через instagrapi."""
-from typing import Any
+from typing import Any, cast
 
 from instagrapi.exceptions import UserNotFound
 from loguru import logger
@@ -31,8 +31,8 @@ TOP_HASHTAG_MEDIAS_AMOUNT = 9
 def media_to_scraped_post(media: Any) -> ScrapedPost:
     """Маппинг instagrapi Media → ScrapedPost."""
     caption = media.caption_text or ""
-    sponsor_usernames = [
-        name for s in (media.sponsor_tags or [])
+    sponsor_usernames: list[str] = [
+        str(name) for s in cast(list[Any], media.sponsor_tags or [])
         if (name := getattr(s, "username", None))
     ]
 
@@ -51,11 +51,11 @@ def media_to_scraped_post(media: Any) -> ScrapedPost:
         media.media_type, getattr(media, "video_duration", None)
     )
 
-    usertags_list = []
-    for ut in getattr(media, "usertags", []) or []:
+    usertags_list: list[str] = []
+    for ut in cast(list[Any], getattr(media, "usertags", None) or []):
         username = getattr(getattr(ut, "user", None), "username", None)
         if username:
-            usertags_list.append(username)
+            usertags_list.append(str(username))
 
     accessibility_caption = getattr(media, "accessibility_caption", None) or None
 

@@ -424,7 +424,7 @@ async def match_tags(
     if tags is None:
         tags = await load_tags(db)
 
-    rows = []
+    rows: list[dict[str, str]] = []
     seen_tag_ids: set[str] = set()
     unmatched_count = 0
     for tag_name in insights.tags:

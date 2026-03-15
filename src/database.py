@@ -73,21 +73,24 @@ def _extract_rpc_scalar(data: Any) -> Any:
     if isinstance(data, list):
         if not data:
             return None
-        first_item = data[0]
+        list_data = cast(list[Any], data)
+        first_item = list_data[0]
         if isinstance(first_item, dict):
-            if not first_item:
+            first_dict = cast(dict[str, Any], first_item)
+            if not first_dict:
                 return None
-            if len(first_item) == 1:
-                return next(iter(first_item.values()))
-            return first_item
+            if len(first_dict) == 1:
+                return next(iter(first_dict.values()))
+            return first_dict
         return first_item
 
     if isinstance(data, dict):
-        if not data:
+        typed_data = cast(dict[str, Any], data)
+        if not typed_data:
             return None
-        if len(data) == 1:
-            return next(iter(data.values()))
-        return data
+        if len(typed_data) == 1:
+            return next(iter(typed_data.values()))
+        return typed_data
 
     return data
 
@@ -221,9 +224,10 @@ async def fetch_pending_tasks(db: Client, limit: int = 10) -> list[TaskRecord]:
             rows.append(cast(TaskRecord, row))
 
     if rows:
-        types = {}
+        types: dict[str, int] = {}
         for t in rows:
-            tt = t.get("task_type", "?")
+            # t["task_type"] может отсутствовать в mock-данных — используем get с fallback
+            tt: str = str(t.get("task_type", "?"))
             types[tt] = types.get(tt, 0) + 1
         logger.debug(f"fetch_pending_tasks: {len(rows)} tasks ({types})")
     return rows

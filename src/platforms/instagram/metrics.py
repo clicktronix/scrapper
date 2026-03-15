@@ -16,7 +16,7 @@ def calculate_er(posts: list[ScrapedPost], follower_count: int) -> float | None:
     engagements = [p.like_count + p.comment_count for p in posts]
     median_engagement = statistics.median(engagements)
     er = round(median_engagement / follower_count * 100, 2)
-    # Clamp: БД хранит er_reels как numeric(5,2), макс 999.99
+    # Clamp: БД хранит er_reels как numeric(7,2), макс 99999.99; ограничиваем 999.99 как бизнес-лимит
     return min(er, 999.99)
 
 
@@ -67,7 +67,7 @@ def calculate_posts_per_week(posts: list[ScrapedPost]) -> float | None:
     if days == 0:
         return None
     ppw = round(len(posts) / (days / 7), 2)
-    # Clamp: БД хранит posts_per_week как numeric(5,2), макс 999.99
+    # Clamp: БД хранит posts_per_week как numeric(7,2), макс 99999.99; ограничиваем 999.99 как бизнес-лимит
     return min(ppw, 999.99)
 
 
@@ -76,9 +76,9 @@ def assign_engagement_rates(posts: list[ScrapedPost], follower_count: int) -> No
     if follower_count <= 0:
         return
     for p in posts:
-        p.engagement_rate = round(
-            (p.like_count + p.comment_count) / follower_count * 100, 2
-        )
+        er = round((p.like_count + p.comment_count) / follower_count * 100, 2)
+        # Clamp: blog_posts.engagement_rate — numeric(7,2); ограничиваем 999.99 как бизнес-лимит
+        p.engagement_rate = min(er, 999.99)
 
 
 def select_posts_for_comments(posts: list[ScrapedPost], limit: int) -> list[ScrapedPost]:

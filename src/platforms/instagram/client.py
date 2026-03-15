@@ -5,7 +5,7 @@ import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from instagrapi import Client
 from instagrapi.exceptions import (
@@ -108,6 +108,42 @@ def _generate_device_for_account(account_name: str) -> dict[str, str | int]:
     return device
 
 
+# Типизированные обёртки для методов instagrapi с Unknown-сигнатурами.
+# instagrapi Client не имеет type stubs — обёртки с явными типами
+# скрывают Unknown от pyright через промежуточную переменную Any.
+
+def _cl_get_settings(cl: Client) -> dict[str, Any]:
+    """Получить настройки сессии instagrapi-клиента."""
+    cl_any: Any = cl
+    result: dict[str, Any] = cl_any.get_settings()
+    return result
+
+
+def _cl_set_settings(cl: Client, settings: dict[str, Any]) -> None:
+    """Загрузить настройки сессии в instagrapi-клиент."""
+    cl_any: Any = cl
+    cl_any.set_settings(settings)
+
+
+def _cl_set_device(cl: Client, device: dict[str, Any], reset: bool = False) -> None:
+    """Установить устройство instagrapi-клиенту."""
+    cl_any: Any = cl
+    cl_any.set_device(device, reset)
+
+
+def _cl_set_uuids(cl: Client, uuids: dict[str, Any]) -> None:
+    """Установить UUID instagrapi-клиенту."""
+    cl_any: Any = cl
+    cl_any.set_uuids(uuids)
+
+
+def _cl_get_timeline_feed(cl: Client) -> dict[str, Any]:
+    """Получить timeline feed для валидации сессии."""
+    cl_any: Any = cl
+    result: dict[str, Any] = cl_any.get_timeline_feed()
+    return result
+
+
 @dataclass
 class AccountState:
     """Состояние одного Instagram-аккаунта."""
@@ -198,23 +234,23 @@ class AccountPool:
                 session = await load_session(db, cred.name)
                 logger.debug(f"Account {cred.name}: saved session {'found' if session else 'not found'}")
                 if session:
-                    cl.set_settings(session)
+                    _cl_set_settings(cl, session)
                     try:
                         # Валидация сессии через get_timeline_feed
                         logger.debug(f"Account {cred.name}: validating session via timeline feed...")
-                        await asyncio.to_thread(cl.get_timeline_feed)
+                        await asyncio.to_thread(_cl_get_timeline_feed, cl)
                         logger.info(f"Account {cred.name}: session restored via timeline check")
                     except Exception as e:
                         logger.warning(f"Account {cred.name}: session expired ({type(e).__name__}), fresh login")
                         # Сохраняем device settings и UUID для консистентности
-                        old_settings = cl.get_settings()
-                        old_uuids = old_settings.get("uuids", {})
-                        old_device = old_settings.get("device_settings", {})
+                        old_settings: dict[str, Any] = _cl_get_settings(cl)
+                        old_uuids: dict[str, Any] = cast(dict[str, Any], old_settings.get("uuids", {}))
+                        old_device: dict[str, Any] = cast(dict[str, Any], old_settings.get("device_settings", {}))
                         cl = Client()
                         if old_device:
-                            cl.set_device(old_device)
+                            _cl_set_device(cl, old_device)
                         if old_uuids:
-                            cl.set_uuids(old_uuids)
+                            _cl_set_uuids(cl, old_uuids)
                         if cred.proxy:
                             cl.set_proxy(cred.proxy)
                         cl.delay_range = [settings.scrape_delay_min, settings.scrape_delay_max]
@@ -225,7 +261,7 @@ class AccountPool:
                 else:
                     # Первый логин — уникальный device fingerprint
                     device = _generate_device_for_account(cred.name)
-                    cl.set_device(device, reset=True)
+                    _cl_set_device(cl, cast(dict[str, Any], device), reset=True)
                     logger.debug(f"Account {cred.name}: unique device set "
                                  f"({device['manufacturer']} {device['model']})")
                     await asyncio.to_thread(
@@ -235,7 +271,7 @@ class AccountPool:
                     logger.info(f"Account {cred.name}: fresh login")
 
                 # Сохранить сессию
-                await save_session(db, cred.name, cl.get_settings())
+                await save_session(db, cred.name, _cl_get_settings(cl))
                 logger.debug(f"Account {cred.name}: session saved to storage")
 
                 accounts.append(AccountState(
@@ -322,7 +358,7 @@ class AccountPool:
             # Сохранить обновлённую сессию после re-login
             if self._db is not None:
                 try:
-                    await save_session(self._db, account.name, account.client.get_settings())
+                    await save_session(self._db, account.name, _cl_get_settings(account.client))
                 except Exception as e:
                     logger.warning(f"Account {account.name}: failed to save session after re-login: {e}")
             return True
@@ -430,7 +466,7 @@ class AccountPool:
         """Сохранить сессии всех аккаунтов (при shutdown)."""
         for acc in self.accounts:
             try:
-                settings = acc.client.get_settings()
-                await save_session(db, acc.name, settings)
+                acc_settings: dict[str, Any] = _cl_get_settings(acc.client)
+                await save_session(db, acc.name, acc_settings)
             except Exception as e:
                 logger.error(f"Failed to save session for {acc.name}: {e}")

@@ -3,6 +3,7 @@ import asyncio
 import contextlib
 import gc
 from collections.abc import Callable, Coroutine
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from loguru import logger
@@ -10,9 +11,10 @@ from openai import AsyncOpenAI
 from supabase import Client
 
 from src.config import Settings
-from src.database import fetch_pending_tasks, mark_task_failed
+from src.database import fetch_pending_tasks, mark_task_failed, run_in_thread
 from src.models.db_types import TaskRecord
 from src.platforms.base import BaseScraper
+from src.utils import is_transient_network_error
 from src.worker.handlers import (
     handle_ai_analysis,
     handle_discover,
@@ -131,14 +133,36 @@ async def process_task(
                 await handler(db, task, settings)
 
         except Exception as e:
-            logger.exception(f"Unhandled error in task {task_id}")
-            try:
-                await mark_task_failed(
-                    db, task_id, attempts, max_attempts,
-                    f"Unhandled error: {e}", retry=True,
-                )
-            except Exception as fail_err:
-                logger.error(f"Failed to mark task {task_id} as failed: {fail_err}")
+            if is_transient_network_error(e):
+                # Транзиентная ошибка (Errno 11, broken pipe) — не сжигаем попытку.
+                # mark_task_running уже инкрементировал attempts, откатываем назад.
+                logger.warning(f"Transient error in task {task_id}: {e}")
+                try:
+                    await run_in_thread(
+                        db.table("scrape_tasks").update({
+                            "status": "pending",
+                            "error_message": f"Transient error (retry shortly): {e}",
+                            "next_retry_at": (
+                                datetime.now(UTC) + timedelta(seconds=30)
+                            ).isoformat(),
+                            "attempts": attempts,  # откат инкремента
+                        }).eq("id", task_id).execute
+                    )
+                except Exception as fail_err:
+                    logger.error(
+                        f"Failed to reset transient task {task_id}: {fail_err}"
+                    )
+            else:
+                logger.exception(f"Unhandled error in task {task_id}")
+                try:
+                    await mark_task_failed(
+                        db, task_id, attempts, max_attempts,
+                        f"Unhandled error: {e}", retry=True,
+                    )
+                except Exception as fail_err:
+                    logger.error(
+                        f"Failed to mark task {task_id} as failed: {fail_err}"
+                    )
         finally:
             # AI-задачи и full_scrape могут выделять сотни МБ (изображения, JSONL).
             # Принудительный GC гарантирует освобождение циклических ссылок

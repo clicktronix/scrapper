@@ -248,7 +248,7 @@ class CommercialActivity(BaseModel):
     ad_format: list[Literal[
         "integration", "dedicated_post", "stories", "reels", "unboxing", "review"
     ]] = Field(
-        default_factory=list,
+        default_factory=lambda: [],
         description="Форматы рекламы: 'integration'=нативная, 'dedicated_post'=рекламный пост, "
         "'stories'=в сторис, 'reels'=рилс, 'unboxing'=распаковка, 'review'=обзор.",
     )

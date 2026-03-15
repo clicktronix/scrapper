@@ -49,7 +49,8 @@ def _has_successful_ai_insights(value: Any) -> bool:
     """Return True when ai_insights looks like a successful structured analysis."""
     if not isinstance(value, dict):
         return False
-    if value.get("refusal_reason"):
+    typed_value = cast(dict[str, Any], value)
+    if typed_value.get("refusal_reason"):
         return False
     required_sections = (
         "blogger_profile",
@@ -58,7 +59,7 @@ def _has_successful_ai_insights(value: Any) -> bool:
         "commercial",
         "summary",
     )
-    return all(section in value for section in required_sections)
+    return all(section in typed_value for section in required_sections)
 
 
 @dataclass
@@ -81,7 +82,7 @@ class BatchContext:
         "taxonomy_errors": 0,
     })
     # Накапливаем embedding задачи для параллельного выполнения
-    pending_embeddings: list[tuple[str, str]] = field(default_factory=list)
+    pending_embeddings: list[tuple[str, str]] = field(default_factory=lambda: [])
 
 
 def _extract_blog_fields(insights: AIInsights) -> dict[str, Any]:
@@ -252,13 +253,14 @@ async def _load_profiles_for_batch(
             ))
 
         # Нормализация bio_links: обратная совместимость со старым форматом ["url"]
-        raw_bio_links = blog.get("bio_links", []) or []
+        raw_bio_links: list[Any] = cast(list[Any], blog.get("bio_links") or [])
         bio_links: list[BioLink] = []
         for item in raw_bio_links:
             if isinstance(item, str):
                 bio_links.append(BioLink(url=item))
             elif isinstance(item, dict):
-                bio_links.append(BioLink(**item))
+                item_dict = cast(dict[str, Any], item)
+                bio_links.append(BioLink(**item_dict))
 
         profile = ScrapedProfile(
             platform_id=blog.get("platform_id", ""),
@@ -355,7 +357,7 @@ async def handle_ai_analysis(
     text_only_ids: set[str] = set()
     pending_by_id = {pending_task["id"]: pending_task for pending_task in pending_tasks}
     for pt in pending_tasks:
-        payload = pt.get("payload") or {}
+        payload: dict[str, Any] = cast(dict[str, Any], pt.get("payload") or {})
         if payload.get("text_only") and pt.get("blog_id"):
             text_only_ids.add(pt["blog_id"])
 
@@ -386,8 +388,10 @@ async def handle_ai_analysis(
         save_failures: list[str] = []
         for tid in claimed_tasks:
             try:
-                existing_payload = pending_by_id.get(tid, {}).get("payload") or {}
-                merged_payload = {**existing_payload, "batch_id": batch_id}
+                existing_payload: dict[str, Any] = cast(
+                    dict[str, Any], pending_by_id.get(tid, {}).get("payload") or {}
+                )
+                merged_payload: dict[str, Any] = {**existing_payload, "batch_id": batch_id}
                 await _h.run_in_thread(
                     db.table("scrape_tasks").update({
                         "payload": merged_payload,
@@ -495,7 +499,7 @@ async def _process_blog_result(
     taxonomy_metrics = ctx.taxonomy_metrics
     if isinstance(insights, tuple) and insights[0] == "refusal":
         # AI refusal — сохранить причину, попробовать text_only retry
-        refusal_reason = insights[1]
+        refusal_reason: str = str(cast(tuple[Any, ...], insights)[1])
         logger.warning(f"[batch_results] Blog {blog_id}: AI refusal: {refusal_reason}")
 
         current_blog = current_by_id.get(blog_id, {})
@@ -528,7 +532,7 @@ async def _process_blog_result(
     else:
         # Успешный AIInsights — экстракция полей (только пустые)
         if not isinstance(insights, AIInsights):
-            logger.error(f"[batch_results] Unexpected insights type for {blog_id}: {type(insights)}")
+            logger.error(f"[batch_results] Unexpected insights type for {blog_id}: {type(cast(object, insights))}")
             return
         extracted = _extract_blog_fields(insights)
         current = current_by_id.get(blog_id, {})

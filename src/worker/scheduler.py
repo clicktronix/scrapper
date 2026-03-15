@@ -48,7 +48,7 @@ def _as_rows(data: Any) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if not isinstance(data, list):
         return rows
-    for item in data:
+    for item in cast(list[Any], data):
         if isinstance(item, dict):
             rows.append(cast(dict[str, Any], item))
     return rows
@@ -111,8 +111,9 @@ async def poll_batches(db: Client, openai_client: AsyncOpenAI) -> None:
     orphaned_task_ids: list[str] = []
     for task in _as_rows(result.data):
         payload = task.get("payload")
-        payload_dict = payload if isinstance(payload, dict) else {}
-        batch_id = payload_dict.get("batch_id")
+        payload_dict: dict[str, Any] = cast(dict[str, Any], payload) if isinstance(payload, dict) else {}
+        batch_id_raw = payload_dict.get("batch_id")
+        batch_id: str | None = batch_id_raw if isinstance(batch_id_raw, str) else None
         if not (isinstance(batch_id, str) and batch_id):
             orphaned_task_ids.append(str(task.get("id", "?")))
             continue
@@ -132,15 +133,28 @@ async def poll_batches(db: Client, openai_client: AsyncOpenAI) -> None:
         if existing is None:
             batches[batch_id][blog_id] = task_info
         elif isinstance(existing, list):
-            existing.append(task_info)
+            cast(list[Any], existing).append(task_info)
         else:
             batches[batch_id][blog_id] = [existing, task_info]
 
     if orphaned_task_ids:
         logger.warning(
             f"[poll_batches] {len(orphaned_task_ids)} running ai_analysis задач "
-            f"без batch_id (потеря batch_id при сохранении?): {orphaned_task_ids[:10]}"
+            f"без batch_id — сбрасываем в pending: {orphaned_task_ids[:10]}"
         )
+        # Сбросить orphaned задачи в pending для повторной обработки.
+        # batch_id потерян (connection error при сохранении) — задачи навсегда
+        # застрянут в running, т.к. poll_batches не может найти их батч.
+        for orphan_id in orphaned_task_ids:
+            try:
+                await run_in_thread(
+                    db.table("scrape_tasks").update({
+                        "status": "pending",
+                        "error_message": "Reset: lost batch_id, no way to poll results",
+                    }).eq("id", orphan_id).execute
+                )
+            except Exception as e:
+                logger.error(f"[poll_batches] Не удалось сбросить orphaned задачу {orphan_id}: {e}")
 
     logger.debug(f"[poll_batches] Found {len(batches)} active batches, "
                  f"{len(result.data)} running tasks")
@@ -391,9 +405,11 @@ def create_scheduler(
             "coalesce": True,
         }
     )
+    # APScheduler не имеет полных type stubs — add_job вызываем через Any
+    sched: Any = scheduler
 
     # Ежедневно в 3:00 — обновление старых профилей
-    scheduler.add_job(
+    sched.add_job(
         schedule_updates,
         "cron",
         hour=3,
@@ -403,7 +419,7 @@ def create_scheduler(
 
     # Каждые 15 минут — проверка батчей
     if openai_client:
-        scheduler.add_job(
+        sched.add_job(
             poll_batches,
             "interval",
             minutes=15,
@@ -412,7 +428,7 @@ def create_scheduler(
         )
 
         # Каждые 2 часа — ретрай зависших батчей
-        scheduler.add_job(
+        sched.add_job(
             retry_stale_batches,
             "interval",
             hours=2,
@@ -421,7 +437,7 @@ def create_scheduler(
         )
 
         # Каждый час — ретрай embedding для блогов без вектора
-        scheduler.add_job(
+        sched.add_job(
             retry_missing_embeddings,
             "interval",
             hours=1,
@@ -430,7 +446,7 @@ def create_scheduler(
         )
 
         # Каждые 2 часа — повторный матчинг taxonomy для ai_insights
-        scheduler.add_job(
+        sched.add_job(
             retry_taxonomy_mappings,
             "interval",
             hours=2,
@@ -439,7 +455,7 @@ def create_scheduler(
         )
 
         # Ежедневный аудит расхождений taxonomy prompt ↔ DB
-        scheduler.add_job(
+        sched.add_job(
             audit_taxonomy_drift,
             "cron",
             hour=5,
@@ -448,7 +464,7 @@ def create_scheduler(
         )
 
     # Каждые 10 минут — recovery зависших running задач
-    scheduler.add_job(
+    sched.add_job(
         recover_tasks,
         "interval",
         minutes=10,
@@ -457,7 +473,7 @@ def create_scheduler(
     )
 
     # Еженедельно в воскресенье 4:00 — очистка старых изображений
-    scheduler.add_job(
+    sched.add_job(
         cleanup_old_images,
         "cron",
         day_of_week="sun",

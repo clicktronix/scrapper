@@ -82,11 +82,12 @@ def _parse_top_comments(raw_value: Any) -> list[ScrapedComment]:
         return []
 
     comments: list[ScrapedComment] = []
-    for item in raw_value:
+    for item in cast(list[Any], raw_value):
         if not isinstance(item, dict):
             continue
-        username = item.get("username")
-        text = item.get("text")
+        item_dict = cast(dict[str, Any], item)
+        username = item_dict.get("username")
+        text = item_dict.get("text")
         if not isinstance(username, str) or not isinstance(text, str):
             continue
         username = username.strip()

@@ -1,9 +1,10 @@
 """Бизнес-логика API скрапера — вынесена из route handlers."""
 import asyncio
 import time
+from collections.abc import Coroutine
+from datetime import datetime as _datetime
 from typing import Any, cast, get_args
 
-from apscheduler.job import Job
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import Response
 from loguru import logger
@@ -124,6 +125,9 @@ async def get_health_status(
         accounts_total = 0
         accounts_available = 0
 
+    # Глубина очереди по task_type (независимый запрос)
+    queue_depth = await _get_queue_depth(db)
+
     # Подсчёт задач из БД — параллельно
     try:
         running, pending = await asyncio.gather(
@@ -142,17 +146,25 @@ async def get_health_status(
         )
         tasks_running = running.count or 0
         tasks_pending = pending.count or 0
-    except Exception as e:
-        logger.error(f"[health] Ошибка проверки БД: {e}")
-        response.status_code = 503
-        tasks_running = -1
-        tasks_pending = -1
-        status = "degraded"
-    else:
         status = "ok"
-
-    # Глубина очереди по task_type
-    queue_depth = await _get_queue_depth(db)
+    except Exception as e:
+        logger.error(f"[health] Ошибка count-запросов: {e}")
+        # Fallback: вычислить из queue_depth если он содержит реальные данные.
+        # При полном падении БД _get_queue_depth возвращает dict с нулями — бесполезен.
+        has_real_data = (
+            queue_depth is not None
+            and any(item.pending > 0 or item.running > 0 for item in queue_depth.values())
+        )
+        if has_real_data and queue_depth is not None:
+            tasks_running = sum(item.running for item in queue_depth.values())
+            tasks_pending = sum(item.pending for item in queue_depth.values())
+            status = "ok"
+            logger.info(f"[health] Fallback из queue_depth: running={tasks_running}, pending={tasks_pending}")
+        else:
+            response.status_code = 503
+            tasks_running = -1
+            tasks_pending = -1
+            status = "degraded"
 
     return HealthResponse(
         status=status,
@@ -182,11 +194,14 @@ def get_scheduler_status(scheduler: AsyncIOScheduler) -> list[dict[str, Any]]:
     last_runs = get_last_run_times()
     jobs: list[dict[str, Any]] = []
 
-    raw_jobs = cast(list[Job], scheduler.get_jobs())
+    # APScheduler не имеет полных type stubs — приводим к Any для доступа к методам
+    scheduler_any = cast(Any, scheduler)
+    raw_jobs: list[Any] = scheduler_any.get_jobs()
     for job in raw_jobs:
         job_id = str(job.id)
         name, interval = JOB_NAMES.get(job_id, (job_id, "unknown"))
-        next_run = str(job.next_run_time.isoformat()) if job.next_run_time else None
+        next_run_time = cast(_datetime | None, job.next_run_time)
+        next_run = next_run_time.isoformat() if next_run_time else None
         last_run = last_runs.get(job_id)
         status = "ok" if last_run else "unknown"
         jobs.append({
@@ -230,8 +245,10 @@ async def _get_queue_depth(db: Client) -> dict[str, QueueDepthItem] | None:
 
     # Fallback: параллельные count-запросы (pending + running) по каждому task_type
     try:
+        from postgrest import APIResponse  # локальный импорт для типизации
+
         task_types = list(_TASK_TYPES)
-        coros = []
+        coros: list[Coroutine[Any, Any, APIResponse[Any]]] = []
         for tt in task_types:
             coros.append(
                 run_in_thread(
@@ -252,13 +269,15 @@ async def _get_queue_depth(db: Client) -> dict[str, QueueDepthItem] | None:
                 )
             )
 
-        results = await asyncio.gather(*coros, return_exceptions=True)
+        gather_results: list[APIResponse[Any] | BaseException] = await asyncio.gather(
+            *coros, return_exceptions=True
+        )
         depth_fb: dict[str, QueueDepthItem] = {}
         for i, tt in enumerate(task_types):
-            pending_res = results[i * 2]
-            running_res = results[i * 2 + 1]
-            p = (pending_res.count or 0) if not isinstance(pending_res, BaseException) else 0
-            r = (running_res.count or 0) if not isinstance(running_res, BaseException) else 0
+            pending_res = gather_results[i * 2]
+            running_res = gather_results[i * 2 + 1]
+            p = (cast(int, pending_res.count) or 0) if not isinstance(pending_res, BaseException) else 0
+            r = (cast(int, running_res.count) or 0) if not isinstance(running_res, BaseException) else 0
             depth_fb[tt] = QueueDepthItem(pending=p, running=r)
         return depth_fb
     except Exception as e:
