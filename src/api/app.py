@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Respo
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
-from supabase import Client
+from supabase import AsyncClient
 
 from src.api.rate_limiter import RateLimiter
 from src.api.schemas import (
@@ -32,7 +32,7 @@ from src.api.services import (
     get_scheduler_status,
 )
 from src.config import Settings
-from src.database import create_task_if_not_exists, is_blog_fresh, run_in_thread
+from src.database import create_task_if_not_exists, is_blog_fresh
 from src.platforms.instagram.client import AccountPool
 
 security = HTTPBearer(auto_error=False)
@@ -45,7 +45,7 @@ def _as_row_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
-def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> FastAPI:
+def create_app(db: AsyncClient, pool: AccountPool | None, settings: Settings) -> FastAPI:
     """Создать FastAPI-приложение с зависимостями."""
     docs_enabled = settings.api_docs_enabled
     app = FastAPI(
@@ -128,9 +128,7 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
     )
     async def get_task(task_id: UUID = Path(description="UUID задачи")) -> dict[str, Any]:
         """Получить задачу по ID."""
-        result = await run_in_thread(
-            db.table("scrape_tasks").select("*").eq("id", str(task_id)).execute
-        )
+        result = await db.table("scrape_tasks").select("*").eq("id", str(task_id)).execute()
         if not result.data:
             raise HTTPException(status_code=404, detail="Task not found")
         return _as_row_dict(result.data[0])
@@ -148,10 +146,9 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
             try:
                 blog_id = await find_or_create_blog(db, username)
 
-                blog_row = await run_in_thread(
+                blog_row = await (
                     db.table("blogs").select("scrape_status")
-                    .eq("id", blog_id).execute,
-                    retry_transient=True,
+                    .eq("id", blog_id).execute()
                 )
                 blog_status = None
                 if blog_row.data:
@@ -273,9 +270,7 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
     async def retry_task(task_id: UUID = Path(description="UUID задачи")) -> dict[str, str]:
         """Повторить упавшую задачу — сбросить в pending."""
         tid = str(task_id)
-        result = await run_in_thread(
-            db.table("scrape_tasks").select("id, status").eq("id", tid).execute
-        )
+        result = await db.table("scrape_tasks").select("id, status").eq("id", tid).execute()
         if not result.data:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -283,18 +278,16 @@ def create_app(db: Client, pool: AccountPool | None, settings: Settings) -> Fast
         if task["status"] != "failed":
             raise HTTPException(status_code=409, detail=f"Task status is '{task['status']}', expected 'failed'")
 
-        await run_in_thread(
+        await (
             db.table("scrape_tasks").update({
                 "status": "pending",
                 "error_message": None,
                 "next_retry_at": None,
                 "attempts": 0,
-            }).eq("id", tid).eq("status", "failed").execute
+            }).eq("id", tid).eq("status", "failed").execute()
         )
 
-        refreshed = await run_in_thread(
-            db.table("scrape_tasks").select("status").eq("id", tid).execute
-        )
+        refreshed = await db.table("scrape_tasks").select("status").eq("id", tid).execute()
         refreshed_task = _as_row_dict(refreshed.data[0]) if refreshed.data else {}
         if refreshed_task.get("status") != "pending":
             raise HTTPException(status_code=409, detail="Task state changed concurrently")

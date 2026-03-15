@@ -4,9 +4,7 @@ import re
 from typing import Any, cast
 
 from loguru import logger
-from supabase import Client
-
-from src.database import run_in_thread
+from supabase import AsyncClient
 
 BUCKET_NAME = "instagram-sessions"
 MAX_SESSION_SIZE_BYTES = 500 * 1024
@@ -20,7 +18,7 @@ def _build_session_file_path(account_name: str) -> str | None:
     return f"{account_name}.json"
 
 
-async def load_session(db: Client, account_name: str) -> dict[str, Any] | None:
+async def load_session(db: AsyncClient, account_name: str) -> dict[str, Any] | None:
     """
     Загрузить сессию из Supabase Storage.
     Возвращает dict для cl.load_settings() или None.
@@ -30,9 +28,7 @@ async def load_session(db: Client, account_name: str) -> dict[str, Any] | None:
         logger.warning(f"Unsafe account name for session load: {account_name!r}")
         return None
     try:
-        data = await run_in_thread(
-            db.storage.from_(BUCKET_NAME).download, safe_path
-        )
+        data = await db.storage.from_(BUCKET_NAME).download(safe_path)
         parsed = json.loads(data)
         # Сессия должна быть dict — list/str/int/bool не валидны
         if not isinstance(parsed, dict):
@@ -44,7 +40,7 @@ async def load_session(db: Client, account_name: str) -> dict[str, Any] | None:
         return None
 
 
-async def save_session(db: Client, account_name: str, settings: dict[str, Any]) -> None:
+async def save_session(db: AsyncClient, account_name: str, settings: dict[str, Any]) -> None:
     """Сохранить сессию в Supabase Storage (перезаписать если есть)."""
     safe_path = _build_session_file_path(account_name)
     if safe_path is None:
@@ -58,8 +54,7 @@ async def save_session(db: Client, account_name: str, settings: dict[str, Any]) 
                 f"{len(data)} bytes > {MAX_SESSION_SIZE_BYTES}"
             )
             return
-        await run_in_thread(
-            db.storage.from_(BUCKET_NAME).upload,
+        await db.storage.from_(BUCKET_NAME).upload(
             safe_path,
             data,
             {"content-type": "application/json", "upsert": "true"},

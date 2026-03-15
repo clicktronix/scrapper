@@ -1,11 +1,12 @@
 """Тесты сервисных функций API — services.py."""
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from src.api.schemas import HealthResponse
 from src.api.services import fetch_tasks_list, find_blog_by_username, get_health_status
+from tests.test_api.conftest import make_db_mock
 
 
 class TestFindBlogByUsername:
@@ -13,22 +14,22 @@ class TestFindBlogByUsername:
 
     @pytest.mark.asyncio
     async def test_returns_blog_id_when_found(self) -> None:
-        """Блог найден → возвращает id."""
-        db = MagicMock()
-        with patch("src.api.services.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = MagicMock(data=[{"id": "blog-123"}])
-            result = await find_blog_by_username(db, "testuser")
+        """Блог найден — возвращает id."""
+        db = make_db_mock()
+        builder = db.table.return_value
+        builder.execute.return_value = MagicMock(data=[{"id": "blog-123"}])
 
+        result = await find_blog_by_username(db, "testuser")
         assert result == "blog-123"
 
     @pytest.mark.asyncio
     async def test_returns_none_when_not_found(self) -> None:
-        """Блог не найден → возвращает None."""
-        db = MagicMock()
-        with patch("src.api.services.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = MagicMock(data=[])
-            result = await find_blog_by_username(db, "nonexistent")
+        """Блог не найден — возвращает None."""
+        db = make_db_mock()
+        builder = db.table.return_value
+        builder.execute.return_value = MagicMock(data=[])
 
+        result = await find_blog_by_username(db, "nonexistent")
         assert result is None
 
 
@@ -38,7 +39,12 @@ class TestGetHealthStatus:
     @pytest.mark.asyncio
     async def test_ok_with_pool(self) -> None:
         """Статус ok при наличии pool и живой БД."""
-        db = MagicMock()
+        db = make_db_mock()
+        builder = db.table.return_value
+        builder.execute.return_value = MagicMock(count=3)
+        # RPC queue_depth — пустой результат, fallback к count-запросам
+        db.rpc.return_value.execute.return_value = MagicMock(data=[])
+
         pool = MagicMock()
         now = time.time()
         pool.accounts = [MagicMock(), MagicMock()]
@@ -49,9 +55,7 @@ class TestGetHealthStatus:
         pool.requests_per_hour = 30
         response = MagicMock()
 
-        with patch("src.api.services.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = MagicMock(count=3)
-            result = await get_health_status(db, pool, response)
+        result = await get_health_status(db, pool, response)
 
         assert isinstance(result, HealthResponse)
         assert result.status == "ok"
@@ -63,12 +67,13 @@ class TestGetHealthStatus:
     @pytest.mark.asyncio
     async def test_ok_without_pool(self) -> None:
         """Статус ok без pool (HikerAPI бэкенд)."""
-        db = MagicMock()
+        db = make_db_mock()
+        builder = db.table.return_value
+        builder.execute.return_value = MagicMock(count=0)
+        db.rpc.return_value.execute.return_value = MagicMock(data=[])
         response = MagicMock()
 
-        with patch("src.api.services.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = MagicMock(count=0)
-            result = await get_health_status(db, None, response)
+        result = await get_health_status(db, None, response)
 
         assert result.status == "ok"
         assert result.accounts_total == 0
@@ -77,12 +82,14 @@ class TestGetHealthStatus:
     @pytest.mark.asyncio
     async def test_degraded_on_db_error(self) -> None:
         """При ошибке БД — статус degraded, response.status_code = 503."""
-        db = MagicMock()
+        db = make_db_mock()
+        builder = db.table.return_value
+        builder.execute.side_effect = Exception("DB down")
+        db.rpc.return_value.execute.side_effect = Exception("DB down")
         response = MagicMock()
-        response.status_code = 200  # начальное значение
+        response.status_code = 200
 
-        with patch("src.api.services.run_in_thread", new_callable=AsyncMock, side_effect=Exception("DB down")):
-            result = await get_health_status(db, None, response)
+        result = await get_health_status(db, None, response)
 
         assert result.status == "degraded"
         assert result.tasks_running == -1
@@ -96,12 +103,12 @@ class TestFetchTasksList:
     @pytest.mark.asyncio
     async def test_returns_tasks_and_total(self) -> None:
         """Успешное получение списка задач."""
-        db = MagicMock()
+        db = make_db_mock()
+        builder = db.table.return_value
         mock_data = [{"id": "t1", "status": "pending"}, {"id": "t2", "status": "running"}]
+        builder.execute.return_value = MagicMock(data=mock_data, count=5)
 
-        with patch("src.api.services.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = MagicMock(data=mock_data, count=5)
-            result = await fetch_tasks_list(db, limit=2, offset=0)
+        result = await fetch_tasks_list(db, limit=2, offset=0)
 
         assert result["tasks"] == mock_data
         assert result["total"] == 5
@@ -112,10 +119,11 @@ class TestFetchTasksList:
     @pytest.mark.asyncio
     async def test_returns_empty_on_db_error(self) -> None:
         """При ошибке БД возвращает пустой список и error."""
-        db = MagicMock()
+        db = make_db_mock()
+        builder = db.table.return_value
+        builder.execute.side_effect = Exception("DB down")
 
-        with patch("src.api.services.run_in_thread", new_callable=AsyncMock, side_effect=Exception("DB down")):
-            result = await fetch_tasks_list(db)
+        result = await fetch_tasks_list(db)
 
         assert result["tasks"] == []
         assert result["total"] == 0
@@ -124,14 +132,10 @@ class TestFetchTasksList:
     @pytest.mark.asyncio
     async def test_applies_status_filter(self) -> None:
         """Фильтр по status добавляет .eq()."""
-        db = MagicMock()
-        mock_query = MagicMock()
-        db.table.return_value.select.return_value = mock_query
-        mock_query.eq.return_value = mock_query
-        mock_query.order.return_value.range.return_value = mock_query
+        db = make_db_mock()
+        builder = db.table.return_value
+        builder.execute.return_value = MagicMock(data=[], count=0)
 
-        with patch("src.api.services.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = MagicMock(data=[], count=0)
-            await fetch_tasks_list(db, status="pending")
+        await fetch_tasks_list(db, status="pending")
 
-        mock_query.eq.assert_called_once_with("status", "pending")
+        builder.eq.assert_any_call("status", "pending")

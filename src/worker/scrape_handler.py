@@ -6,7 +6,7 @@ from typing import Any, cast
 
 from instagrapi.exceptions import UserNotFound
 from loguru import logger
-from supabase import Client
+from supabase import AsyncClient
 
 import src.worker.handlers as _h
 from src.config import Settings
@@ -99,7 +99,7 @@ def _parse_top_comments(raw_value: Any) -> list[ScrapedComment]:
 
 
 async def handle_full_scrape(
-    db: Client,
+    db: AsyncClient,
     task: TaskRecord,
     scraper: BaseScraper,
     settings: Settings,
@@ -130,11 +130,9 @@ async def handle_full_scrape(
     current_attempts = task["attempts"] + 1
 
     # Получаем username из blogs
-    blog_result = await _h.run_in_thread(
-        db.table("blogs")
-        .select("username, person_id, scrape_status")
-        .eq("id", blog_id).execute
-    )
+    blog_result = await db.table("blogs").select(
+        "username, person_id, scrape_status"
+    ).eq("id", blog_id).execute()
     if not blog_result.data:
         await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
                                   "Blog not found", retry=False)
@@ -161,27 +159,21 @@ async def handle_full_scrape(
     logger.debug(f"[full_scrape] Scraping @{username} (blog={blog_id})")
 
     # Обновить scrape_status
-    await _h.run_in_thread(
-        db.table("blogs").update({"scrape_status": "scraping"}).eq("id", blog_id).execute
-    )
+    await db.table("blogs").update({"scrape_status": "scraping"}).eq("id", blog_id).execute()
 
     try:
         profile = await scraper.scrape_profile(username)
     except PrivateAccountError:
-        await _h.run_in_thread(
-            db.table("blogs")
-            .update({"scrape_status": "private", "needs_review": True})
-            .eq("id", blog_id).execute
-        )
+        await db.table("blogs").update(
+            {"scrape_status": "private", "needs_review": True}
+        ).eq("id", blog_id).execute()
         await _h.mark_task_done(db, task_id)
         return
     except UserNotFound:
         # Пользователь удалён / не найден — без retry, нужна ручная проверка
-        await _h.run_in_thread(
-            db.table("blogs")
-            .update({"scrape_status": "deleted", "needs_review": True})
-            .eq("id", blog_id).execute
-        )
+        await db.table("blogs").update(
+            {"scrape_status": "deleted", "needs_review": True}
+        ).eq("id", blog_id).execute()
         await _h.mark_task_done(db, task_id)
         return
     except InsufficientBalanceError as e:
@@ -199,29 +191,23 @@ async def handle_full_scrape(
         if not retry:
             update_data["needs_review"] = True
             update_data["scrape_error"] = str(e)[:1000]
-        await _h.run_in_thread(
-            db.table("blogs").update(update_data).eq("id", blog_id).execute
-        )
+        await db.table("blogs").update(update_data).eq("id", blog_id).execute()
         await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
                                   _h.sanitize_error(str(e)), retry=retry)
         return
     except AllAccountsCooldownError as e:
-        await _h.run_in_thread(
-            db.table("blogs").update({"scrape_status": "pending"}).eq("id", blog_id).execute
-        )
+        await db.table("blogs").update({"scrape_status": "pending"}).eq("id", blog_id).execute()
         await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
                                   _h.sanitize_error(str(e)), retry=True)
         return
     except Exception as e:
         logger.exception(f"[full_scrape] @{username}: неожиданная ошибка скрапинга")
         # scrape_status="pending" при retry, чтобы worker мог подхватить снова
-        await _h.run_in_thread(
-            db.table("blogs").update({
-                "scrape_status": "pending",
-                "needs_review": True,
-                "scrape_error": _h.sanitize_error(str(e))[:1000],
-            }).eq("id", blog_id).execute
-        )
+        await db.table("blogs").update({
+            "scrape_status": "pending",
+            "needs_review": True,
+            "scrape_error": _h.sanitize_error(str(e))[:1000],
+        }).eq("id", blog_id).execute()
         await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
                                   _h.sanitize_error(str(e)), retry=True)
         return
@@ -274,9 +260,9 @@ async def handle_full_scrape(
 
         # Обновить full_name в persons
         if person_id and profile.full_name:
-            await _h.run_in_thread(
-                db.table("persons").update({"full_name": profile.full_name}).eq("id", person_id).execute
-            )
+            await db.table("persons").update(
+                {"full_name": profile.full_name}
+            ).eq("id", person_id).execute()
 
         await _h.upsert_posts(db, blog_id, posts_data)
         logger.debug(f"[full_scrape] @{username}: upserted {len(posts_data)} posts/reels")
@@ -285,12 +271,10 @@ async def handle_full_scrape(
         logger.debug(f"[full_scrape] @{username}: upserted {len(highlights_data)} highlights")
     except Exception as e:
         logger.exception(f"[full_scrape] @{username}: ошибка upsert данных")
-        await _h.run_in_thread(
-            db.table("blogs").update({
-                "scrape_status": "failed",
-                "scrape_error": _h.sanitize_error(str(e))[:1000],
-            }).eq("id", blog_id).execute
-        )
+        await db.table("blogs").update({
+            "scrape_status": "failed",
+            "scrape_error": _h.sanitize_error(str(e))[:1000],
+        }).eq("id", blog_id).execute()
         await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
                                   _h.sanitize_error(str(e)), retry=True)
         return

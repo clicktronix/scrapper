@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.conftest import make_db_mock
+
 
 def _current_blog_row(*, status: str, ai_insights: dict) -> dict:
     return {
@@ -24,7 +26,7 @@ class TestHandleBatchResultsRegressions:
         """Refusal из другого батча не должен перетирать успешные insights."""
         from src.worker.handlers import handle_batch_results
 
-        db = MagicMock()
+        db = make_db_mock()
         openai_client = MagicMock()
         successful_insights = {
             "blogger_profile": {"page_type": "personal"},
@@ -33,6 +35,13 @@ class TestHandleBatchResultsRegressions:
             "commercial": {},
             "summary": "ok",
         }
+
+        # execute() для загрузки current blogs
+        db.table.return_value.execute = AsyncMock(
+            return_value=MagicMock(
+                data=[_current_blog_row(status="ai_analyzed", ai_insights=successful_insights)]
+            )
+        )
 
         with (
             patch(
@@ -46,13 +55,9 @@ class TestHandleBatchResultsRegressions:
             patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock) as mock_done,
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock) as mock_retry_task,
         ):
-            mock_run.return_value = MagicMock(
-                data=[_current_blog_row(status="ai_analyzed", ai_insights=successful_insights)]
-            )
             await handle_batch_results(db, openai_client, "batch-1", {"blog-1": "task-1"})
 
         # refusal не перетирает успешный ai_insights и не создаёт text-only retry
@@ -65,8 +70,15 @@ class TestHandleBatchResultsRegressions:
         """Ошибка mark_task_failed для одной задачи не блокирует остальные задачи блога."""
         from src.worker.handlers import handle_batch_results
 
-        db = MagicMock()
+        db = make_db_mock()
         openai_client = MagicMock()
+
+        # execute() для загрузки current blogs
+        db.table.return_value.execute = AsyncMock(
+            return_value=MagicMock(
+                data=[_current_blog_row(status="running", ai_insights={})]
+            )
+        )
 
         with (
             patch(
@@ -77,7 +89,6 @@ class TestHandleBatchResultsRegressions:
             patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.ai_handler._process_blog_result", new_callable=AsyncMock, side_effect=Exception("boom")),
             patch(
                 "src.worker.handlers.mark_task_failed",
@@ -85,9 +96,6 @@ class TestHandleBatchResultsRegressions:
                 side_effect=[Exception("db down"), None],
             ) as mock_failed,
         ):
-            mock_run.return_value = MagicMock(
-                data=[_current_blog_row(status="running", ai_insights={})]
-            )
             await handle_batch_results(
                 db,
                 openai_client,

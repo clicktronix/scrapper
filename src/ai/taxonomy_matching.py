@@ -4,10 +4,9 @@ import re
 
 from loguru import logger
 from rapidfuzz import fuzz
-from supabase import Client
+from supabase import AsyncClient
 
 from src.ai.schemas import AIInsights
-from src.database import run_in_thread
 
 __all__ = [
     "invalidate_taxonomy_cache",
@@ -98,7 +97,7 @@ def _fuzzy_lookup(key: str, cache: dict[str, str], cutoff: float = 80.0) -> str 
     return None
 
 
-async def load_categories(db: Client) -> dict[str, str]:
+async def load_categories(db: AsyncClient) -> dict[str, str]:
     """Загрузить все категории из БД (с in-memory кэшем).
 
     Возвращает {key: category_id} где:
@@ -114,9 +113,7 @@ async def load_categories(db: Client) -> dict[str, str]:
         if _categories_cache is not None:
             return _categories_cache
 
-        cat_result = await run_in_thread(
-            db.table("categories").select("id, code, name, parent_id").execute
-        )
+        cat_result = await db.table("categories").select("id, code, name, parent_id").execute()
         categories: dict[str, str] = {}
         for c in cat_result.data:
             if not isinstance(c, dict):
@@ -137,7 +134,7 @@ async def load_categories(db: Client) -> dict[str, str]:
 
 
 async def match_categories(
-    db: Client,
+    db: AsyncClient,
     blog_id: str,
     insights: AIInsights,
     categories: dict[str, str] | None = None,
@@ -207,12 +204,10 @@ async def match_categories(
 
     if rows:
         # Атомарная замена связей через RPC (DELETE+INSERT внутри одной транзакции в БД).
-        await run_in_thread(
-            db.rpc("set_blog_categories_for_scraper", {
-                "p_blog_id": blog_id,
-                "p_categories": rows,
-            }).execute
-        )
+        await db.rpc("set_blog_categories_for_scraper", {
+            "p_blog_id": blog_id,
+            "p_categories": rows,
+        }).execute()
 
     return {
         "total": total,
@@ -313,7 +308,7 @@ def normalize_brand(name: str) -> str:
     return normalized.strip()
 
 
-async def load_cities(db: Client) -> dict[str, str]:
+async def load_cities(db: AsyncClient) -> dict[str, str]:
     """Загрузить города из БД (с in-memory кэшем).
 
     Возвращает {normalized_name: city_id} с индексацией по:
@@ -330,9 +325,7 @@ async def load_cities(db: Client) -> dict[str, str]:
         if _cities_cache is not None:
             return _cities_cache
 
-        result = await run_in_thread(
-            db.table("cities").select("id, name, l10n").execute
-        )
+        result = await db.table("cities").select("id, name, l10n").execute()
         cities: dict[str, str] = {}
         for c in result.data:
             if not isinstance(c, dict):
@@ -355,7 +348,7 @@ async def load_cities(db: Client) -> dict[str, str]:
 
 
 async def match_city(
-    db: Client,
+    db: AsyncClient,
     blog_id: str,
     city_name: str,
     cities: dict[str, str],
@@ -372,16 +365,14 @@ async def match_city(
         return False
 
     # Upsert в blog_cities (idempotent)
-    await run_in_thread(
-        db.table("blog_cities").upsert(
-            {"blog_id": blog_id, "city_id": city_id},
-            on_conflict="blog_id,city_id",
-        ).execute
-    )
+    await db.table("blog_cities").upsert(
+        {"blog_id": blog_id, "city_id": city_id},
+        on_conflict="blog_id,city_id",
+    ).execute()
     return True
 
 
-async def load_tags(db: Client) -> dict[str, str]:
+async def load_tags(db: AsyncClient) -> dict[str, str]:
     """Загрузить активные теги из БД (с in-memory кэшем). Возвращает {name_lower: tag_id}."""
     global _tags_cache
     if _tags_cache is not None:
@@ -392,9 +383,7 @@ async def load_tags(db: Client) -> dict[str, str]:
         if _tags_cache is not None:
             return _tags_cache
 
-        result = await run_in_thread(
-            db.table("tags").select("id, name").eq("status", "active").execute
-        )
+        result = await db.table("tags").select("id, name").eq("status", "active").execute()
         tags: dict[str, str] = {}
         for t in result.data:
             if not isinstance(t, dict):
@@ -408,7 +397,7 @@ async def load_tags(db: Client) -> dict[str, str]:
 
 
 async def match_tags(
-    db: Client,
+    db: AsyncClient,
     blog_id: str,
     insights: AIInsights,
     tags: dict[str, str] | None = None,
@@ -448,12 +437,10 @@ async def match_tags(
 
     if rows:
         # Атомарная замена связей через RPC (DELETE+INSERT внутри одной транзакции в БД).
-        await run_in_thread(
-            db.rpc("set_blog_tags_for_scraper", {
-                "p_blog_id": blog_id,
-                "p_tags": rows,
-            }).execute
-        )
+        await db.rpc("set_blog_tags_for_scraper", {
+            "p_blog_id": blog_id,
+            "p_tags": rows,
+        }).execute()
 
     return {
         "total": len(insights.tags),

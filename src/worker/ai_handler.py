@@ -8,7 +8,7 @@ from typing import Any, cast
 
 from loguru import logger
 from openai import AsyncOpenAI
-from supabase import Client
+from supabase import AsyncClient
 
 import src.worker.handlers as _h
 from src.ai.schemas import AIInsights
@@ -31,7 +31,7 @@ _OPENAI_QUOTA_ERRORS = ("token_limit_exceeded", "billing_hard_limit_reached", "i
 
 
 async def _safe_fail_tasks(
-    db: Client,
+    db: AsyncClient,
     task_infos: list[tuple[str, int, int]],
     error: str,
     *,
@@ -66,7 +66,7 @@ def _has_successful_ai_insights(value: Any) -> bool:
 class BatchContext:
     """Общий контекст для обработки результатов батча (shared между всеми блогами)."""
 
-    db: Client
+    db: AsyncClient
     openai_client: AsyncOpenAI
     current_by_id: dict[str, dict[str, Any]]
     categories_cache: dict[str, str]
@@ -143,7 +143,7 @@ def _extract_blog_fields(insights: AIInsights) -> dict[str, Any]:
 
 
 async def _load_profiles_for_batch(
-    db: Client,
+    db: AsyncClient,
     pending_tasks: list[dict[str, Any]],
 ) -> tuple[list[tuple[str, ScrapedProfile]], list[str], list[str]]:
     """
@@ -155,22 +155,13 @@ async def _load_profiles_for_batch(
         return [], [], []
 
     # Батчевая загрузка всех данных (3 запроса вместо N*3)
-    blogs_result = await _h.run_in_thread(
-        db.table("blogs").select("*").in_("id", blog_ids).execute
-    )
-    posts_result = await _h.run_in_thread(
-        db.table("blog_posts")
-        .select("*")
-        .in_("blog_id", blog_ids)
-        .order("taken_at", desc=True)
-        .execute
-    )
-    highlights_result = await _h.run_in_thread(
-        db.table("blog_highlights")
-        .select("*")
-        .in_("blog_id", blog_ids)
-        .execute
-    )
+    blogs_result = await db.table("blogs").select("*").in_("id", blog_ids).execute()
+    posts_result = await db.table("blog_posts").select("*").in_(
+        "blog_id", blog_ids
+    ).order("taken_at", desc=True).execute()
+    highlights_result = await db.table("blog_highlights").select("*").in_(
+        "blog_id", blog_ids
+    ).execute()
 
     # Индексация по blog_id
     blog_rows = cast(list[dict[str, Any]], blogs_result.data or [])
@@ -291,7 +282,7 @@ async def _load_profiles_for_batch(
 
 
 async def handle_ai_analysis(
-    db: Client,
+    db: AsyncClient,
     task: dict[str, Any],
     openai_client: AsyncOpenAI,
     settings: Settings,
@@ -302,15 +293,11 @@ async def handle_ai_analysis(
     """
     # Считаем pending ai_analysis задачи
     logger.debug("[ai_analysis] Checking pending ai_analysis tasks...")
-    pending_result = await _h.run_in_thread(
-        db.table("scrape_tasks")
-        .select("id, blog_id, created_at, attempts, max_attempts, payload")
-        .eq("task_type", "ai_analysis")
-        .eq("status", "pending")
-        .order("created_at", desc=False)
-        .limit(100)
-        .execute
-    )
+    pending_result = await db.table("scrape_tasks").select(
+        "id, blog_id, created_at, attempts, max_attempts, payload"
+    ).eq("task_type", "ai_analysis").eq("status", "pending").order(
+        "created_at", desc=False
+    ).limit(100).execute()
     pending_tasks = cast(list[dict[str, Any]], pending_result.data or [])
 
     # Гарантируем что текущая задача включена (защита от гонки с параллельным worker'ом)
@@ -392,11 +379,9 @@ async def handle_ai_analysis(
                     dict[str, Any], pending_by_id.get(tid, {}).get("payload") or {}
                 )
                 merged_payload: dict[str, Any] = {**existing_payload, "batch_id": batch_id}
-                await _h.run_in_thread(
-                    db.table("scrape_tasks").update({
-                        "payload": merged_payload,
-                    }).eq("id", tid).execute
-                )
+                await db.table("scrape_tasks").update({
+                    "payload": merged_payload,
+                }).eq("id", tid).execute()
             except Exception as save_err:
                 save_failures.append(tid)
                 logger.error(
@@ -430,14 +415,12 @@ async def handle_ai_analysis(
             for tid in claimed_tasks:
                 attempts, _max = claimed_tasks[tid]
                 try:
-                    await _h.run_in_thread(
-                        db.table("scrape_tasks").update({
-                            "status": "pending",
-                            "attempts": attempts - 1,  # откат mark_task_running
-                            "error_message": _h.sanitize_error(error_str)[:500],
-                            "next_retry_at": next_retry.isoformat(),
-                        }).eq("id", tid).execute
-                    )
+                    await db.table("scrape_tasks").update({
+                        "status": "pending",
+                        "attempts": attempts - 1,  # откат mark_task_running
+                        "error_message": _h.sanitize_error(error_str)[:500],
+                        "next_retry_at": next_retry.isoformat(),
+                    }).eq("id", tid).execute()
                 except Exception as rollback_err:
                     logger.error(f"Failed to return task {tid} to pending: {rollback_err}")
         else:
@@ -512,13 +495,11 @@ async def _process_blog_result(
             return
         already_refused = current_status == "ai_refused"
 
-        await _h.run_in_thread(
-            db.table("blogs").update({
-                "ai_insights": {"refusal_reason": refusal_reason},
-                "scrape_status": "ai_analyzed" if already_refused else "ai_refused",
-                "ai_analyzed_at": datetime.now(UTC).isoformat(),
-            }).eq("id", blog_id).execute
-        )
+        await db.table("blogs").update({
+            "ai_insights": {"refusal_reason": refusal_reason},
+            "scrape_status": "ai_analyzed" if already_refused else "ai_refused",
+            "ai_analyzed_at": datetime.now(UTC).isoformat(),
+        }).eq("id", blog_id).execute()
 
         if not already_refused:
             try:
@@ -562,9 +543,7 @@ async def _process_blog_result(
             "scrape_status": "ai_analyzed",
             **extracted,
         }
-        await _h.run_in_thread(
-            db.table("blogs").update(update_data).eq("id", blog_id).execute
-        )
+        await db.table("blogs").update(update_data).eq("id", blog_id).execute()
 
         # Матчинг категорий (не блокирует mark_task_done при ошибке)
         categories_stats = {"total": 0, "matched": 0, "unmatched": 0}
@@ -614,7 +593,7 @@ async def _process_blog_result(
 
 
 async def handle_batch_results(
-    db: Client,
+    db: AsyncClient,
     openai_client: AsyncOpenAI,
     batch_id: str,
     task_ids_by_blog: Mapping[str, str | dict[str, Any] | list[str | dict[str, Any]]],
@@ -666,13 +645,10 @@ async def handle_batch_results(
     blog_ids_with_results = list(results.keys())
     current_by_id: dict[str, dict[str, Any]] = {}
     if blog_ids_with_results:
-        current_blogs = await _h.run_in_thread(
-            db.table("blogs").select(
-                "id, city, content_language, audience_gender,"
-                " audience_age, audience_countries, scrape_status, ai_insights"
-            )
-            .in_("id", blog_ids_with_results).execute
-        )
+        current_blogs = await db.table("blogs").select(
+            "id, city, content_language, audience_gender,"
+            " audience_age, audience_countries, scrape_status, ai_insights"
+        ).in_("id", blog_ids_with_results).execute()
         current_rows = cast(list[dict[str, Any]], current_blogs.data or [])
         current_by_id = {str(b["id"]): b for b in current_rows}
 
@@ -758,20 +734,18 @@ async def handle_batch_results(
 
     # Параллельная генерация embedding для всех блогов батча
     if ctx.pending_embeddings:
-        # Семафор ограничивает параллельные run_in_thread вызовы,
-        # чтобы не исчерпать thread pool (EAGAIN на Railway)
-        embed_semaphore = asyncio.Semaphore(5)
+        # Семафор ограничивает параллельные DB-запросы,
+        # чтобы не перегрузить connection pool Supabase (60 соединений)
+        embed_semaphore = asyncio.Semaphore(20)
 
         async def _generate_and_save(blog_id: str, text: str) -> None:
             try:
                 vector = await _h.generate_embedding(openai_client, text)
                 if vector:
                     async with embed_semaphore:
-                        await _h.run_in_thread(
-                            db.table("blogs").update({
-                                "embedding": vector,
-                            }).eq("id", blog_id).execute
-                        )
+                        await db.table("blogs").update({
+                            "embedding": vector,
+                        }).eq("id", blog_id).execute()
                     logger.debug(f"[batch_results] Blog {blog_id}: embedding saved ({len(vector)} dim)")
                 else:
                     logger.warning(f"[batch_results] Blog {blog_id}: embedding не сгенерирован (rate limit?)")

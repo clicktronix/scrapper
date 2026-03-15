@@ -5,6 +5,7 @@
 незнакомых тегов с частотностью.
 """
 
+import asyncio
 import sys
 import unicodedata
 from collections import Counter
@@ -14,9 +15,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from supabase import create_async_client  # noqa: E402
+
 from src.ai.taxonomy import TAGS  # noqa: E402
 from src.config import load_settings  # noqa: E402
-from supabase import create_client  # noqa: E402
 
 
 def normalize(tag: str) -> str:
@@ -40,9 +42,9 @@ def build_reference_set() -> set[str]:
     return ref
 
 
-def main() -> None:
+async def main() -> None:
     settings = load_settings()
-    client = create_client(
+    client = await create_async_client(
         settings.supabase_url,
         settings.supabase_service_key.get_secret_value(),
     )
@@ -57,7 +59,7 @@ def main() -> None:
     offset = 0
 
     while True:
-        resp = (
+        resp = await (
             client.table("blogs")
             .select("id, ai_insights")
             .not_.is_("ai_insights", "null")
@@ -139,4 +141,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

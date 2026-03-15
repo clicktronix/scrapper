@@ -1,6 +1,6 @@
 """Тесты справочника категорий и тегов."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -258,6 +258,17 @@ class TestFuzzyLookup:
         assert _fuzzy_lookup("абсолютно другое", cache) is None
 
 
+def _mock_async_db():
+    """Создать мок Supabase AsyncClient с async execute для таблиц."""
+    db = MagicMock()
+    table_mock = MagicMock()
+    db.table.return_value = table_mock
+    table_mock.select.return_value = table_mock
+    table_mock.eq.return_value = table_mock
+    table_mock.execute = AsyncMock(return_value=MagicMock(data=[]))
+    return db, table_mock
+
+
 class TestTaxonomyCache:
     """Тесты in-memory кэша для load_categories / load_tags / load_cities."""
 
@@ -265,66 +276,53 @@ class TestTaxonomyCache:
     async def test_load_categories_cached(self) -> None:
         """Повторный вызов не делает запрос в БД."""
         invalidate_taxonomy_cache()
-        mock_result = MagicMock(
-            data=[{"id": "c1", "code": "beauty", "name": "Красота", "parent_id": None}]
-        )
-        with patch(
-            "src.ai.taxonomy_matching.run_in_thread",
-            new_callable=AsyncMock,
-            return_value=mock_result,
-        ) as mock_run:
-            r1 = await load_categories(MagicMock())
-            r2 = await load_categories(MagicMock())
-            assert mock_run.call_count == 1
-            assert r1 is r2
+        db, table_mock = _mock_async_db()
+        mock_data = [{"id": "c1", "code": "beauty", "name": "Красота", "parent_id": None}]
+        table_mock.execute = AsyncMock(return_value=MagicMock(data=mock_data))
+
+        r1 = await load_categories(db)
+        r2 = await load_categories(db)
+        # execute вызывается один раз — второй раз данные берутся из кэша
+        assert table_mock.execute.call_count == 1
+        assert r1 is r2
         invalidate_taxonomy_cache()
 
     @pytest.mark.asyncio
     async def test_invalidate_forces_reload(self) -> None:
         """invalidate_taxonomy_cache сбрасывает кэш."""
         invalidate_taxonomy_cache()
-        mock_result = MagicMock(
-            data=[{"id": "c1", "code": "beauty", "name": "Красота", "parent_id": None}]
-        )
-        with patch(
-            "src.ai.taxonomy_matching.run_in_thread",
-            new_callable=AsyncMock,
-            return_value=mock_result,
-        ) as mock_run:
-            await load_categories(MagicMock())
-            invalidate_taxonomy_cache()
-            await load_categories(MagicMock())
-            assert mock_run.call_count == 2
+        db, table_mock = _mock_async_db()
+        mock_data = [{"id": "c1", "code": "beauty", "name": "Красота", "parent_id": None}]
+        table_mock.execute = AsyncMock(return_value=MagicMock(data=mock_data))
+
+        await load_categories(db)
+        invalidate_taxonomy_cache()
+        await load_categories(db)
+        assert table_mock.execute.call_count == 2
         invalidate_taxonomy_cache()
 
     @pytest.mark.asyncio
     async def test_load_tags_cached(self) -> None:
         """Повторный вызов load_tags не делает запрос в БД."""
         invalidate_taxonomy_cache()
-        mock_result = MagicMock(data=[{"id": "t1", "name": "видео-контент"}])
-        with patch(
-            "src.ai.taxonomy_matching.run_in_thread",
-            new_callable=AsyncMock,
-            return_value=mock_result,
-        ) as mock_run:
-            await load_tags(MagicMock())
-            await load_tags(MagicMock())
-            assert mock_run.call_count == 1
+        db, table_mock = _mock_async_db()
+        mock_data = [{"id": "t1", "name": "видео-контент"}]
+        table_mock.execute = AsyncMock(return_value=MagicMock(data=mock_data))
+
+        await load_tags(db)
+        await load_tags(db)
+        assert table_mock.execute.call_count == 1
         invalidate_taxonomy_cache()
 
     @pytest.mark.asyncio
     async def test_load_cities_cached(self) -> None:
         """Повторный вызов load_cities не делает запрос в БД."""
         invalidate_taxonomy_cache()
-        mock_result = MagicMock(
-            data=[{"id": "ci1", "name": "almaty", "l10n": {"ru": "Алматы"}}]
-        )
-        with patch(
-            "src.ai.taxonomy_matching.run_in_thread",
-            new_callable=AsyncMock,
-            return_value=mock_result,
-        ) as mock_run:
-            await load_cities(MagicMock())
-            await load_cities(MagicMock())
-            assert mock_run.call_count == 1
+        db, table_mock = _mock_async_db()
+        mock_data = [{"id": "ci1", "name": "almaty", "l10n": {"ru": "Алматы"}}]
+        table_mock.execute = AsyncMock(return_value=MagicMock(data=mock_data))
+
+        await load_cities(db)
+        await load_cities(db)
+        assert table_mock.execute.call_count == 1
         invalidate_taxonomy_cache()

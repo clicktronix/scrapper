@@ -1,47 +1,13 @@
 """CRUD-операции с Supabase для скрапера."""
 import asyncio
 import re
-from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from loguru import logger
-from supabase import Client
+from supabase import AsyncClient
 
 from src.models.db_types import TaskRecord
-from src.utils import is_transient_network_error
-
-# Retry на уровне run_in_thread покрывает ВСЕ операции с Supabase
-# (PostgREST-запросы, RPC, Storage), а не только отдельные функции.
-_RUN_IN_THREAD_MAX_RETRIES = 3
-_RUN_IN_THREAD_RETRY_DELAY = 2.0
-
-
-async def run_in_thread[T](
-    func: Callable[..., T], *args: Any, retry_transient: bool = False, **kwargs: Any
-) -> T:
-    """Выполнить синхронный вызов Supabase в отдельном потоке.
-
-    По умолчанию retry отключен, чтобы не дублировать неидемпотентные операции
-    (например insert) при сетевых ошибках после частичного успеха.
-    Для идемпотентных вызовов включайте retry_transient=True.
-    """
-    if not retry_transient:
-        return await asyncio.to_thread(func, *args, **kwargs)
-
-    for attempt in range(1, _RUN_IN_THREAD_MAX_RETRIES + 1):
-        try:
-            return await asyncio.to_thread(func, *args, **kwargs)
-        except Exception as e:
-            if is_transient_network_error(e) and attempt < _RUN_IN_THREAD_MAX_RETRIES:
-                logger.warning(
-                    f"[run_in_thread] Транзиентная ошибка (попытка {attempt}/"
-                    f"{_RUN_IN_THREAD_MAX_RETRIES}): {e}"
-                )
-                await asyncio.sleep(_RUN_IN_THREAD_RETRY_DELAY * attempt)
-                continue
-            raise
-    raise RuntimeError("Unreachable")  # для type checker
 
 
 def sanitize_error(error: str) -> str:
@@ -102,44 +68,44 @@ def _as_dict_row(value: Any) -> dict[str, Any]:
     return {}
 
 
-async def is_blog_fresh(db: Client, blog_id: str, min_days: int) -> bool:
+async def is_blog_fresh(db: AsyncClient, blog_id: str, min_days: int) -> bool:
     """Проверить, скрапился ли блог менее min_days дней назад."""
     threshold = (datetime.now(UTC) - timedelta(days=min_days)).isoformat()
-    result = await run_in_thread(
+    result = await (
         db.table("blogs")
         .select("scraped_at")
         .eq("id", blog_id)
         .gt("scraped_at", threshold)
         .limit(1)
-        .execute
+        .execute()
     )
     return bool(result.data)
 
 
-async def mark_task_running(db: Client, task_id: str) -> bool:
+async def mark_task_running(db: AsyncClient, task_id: str) -> bool:
     """Mark task as running; returns False when task is already claimed."""
-    result = await run_in_thread(
+    result = await (
         db.rpc("mark_task_running", {
             "p_task_id": task_id,
             "p_started_at": datetime.now(UTC).isoformat(),
-        }).execute
+        }).execute()
     )
     claimed_task_id = _extract_rpc_scalar(result.data)
     return claimed_task_id is not None
 
 
-async def mark_task_done(db: Client, task_id: str) -> None:
+async def mark_task_done(db: AsyncClient, task_id: str) -> None:
     """Пометить задачу как done."""
-    await run_in_thread(
+    await (
         db.table("scrape_tasks").update({
             "status": "done",
             "completed_at": datetime.now(UTC).isoformat(),
-        }).eq("id", task_id).execute
+        }).eq("id", task_id).execute()
     )
 
 
 async def mark_task_failed(
-    db: Client,
+    db: AsyncClient,
     task_id: str,
     attempts: int,
     max_attempts: int,
@@ -155,26 +121,26 @@ async def mark_task_failed(
     if retry and attempts < max_attempts:
         backoff = get_backoff_seconds(attempts)
         next_retry = datetime.now(UTC) + timedelta(seconds=backoff)
-        await run_in_thread(
+        await (
             db.table("scrape_tasks").update({
                 "status": "pending",
                 "error_message": safe_error,
                 "next_retry_at": next_retry.isoformat(),
-            }).eq("id", task_id).execute
+            }).eq("id", task_id).execute()
         )
         logger.info(f"Task {task_id} retry in {backoff}s (attempt {attempts}/{max_attempts})")
     else:
-        await run_in_thread(
+        await (
             db.table("scrape_tasks").update({
                 "status": "failed",
                 "error_message": safe_error,
-            }).eq("id", task_id).execute
+            }).eq("id", task_id).execute()
         )
         logger.error(f"Task {task_id} permanently failed: {safe_error}")
 
 
 async def create_task_if_not_exists(
-    db: Client,
+    db: AsyncClient,
     blog_id: str | None,
     task_type: str,
     priority: int,
@@ -185,13 +151,13 @@ async def create_task_if_not_exists(
     Проверка + вставка в одной транзакции (нет race condition).
     blog_id=None допустим для discover-задач.
     """
-    result = await run_in_thread(
+    result = await (
         db.rpc("create_task_if_not_exists", {
             "p_blog_id": blog_id,
             "p_task_type": task_type,
             "p_priority": priority,
             "p_payload": payload or {},
-        }).execute
+        }).execute()
     )
 
     task_id = _extract_rpc_scalar(result.data)
@@ -203,10 +169,10 @@ async def create_task_if_not_exists(
     return None
 
 
-async def fetch_pending_tasks(db: Client, limit: int = 10) -> list[TaskRecord]:
+async def fetch_pending_tasks(db: AsyncClient, limit: int = 10) -> list[TaskRecord]:
     """Получить pending задачи, готовые к обработке (один запрос с or-фильтром)."""
     now = datetime.now(UTC).isoformat()
-    result = await run_in_thread(
+    result = await (
         db.table("scrape_tasks")
         .select("*")
         .eq("status", "pending")
@@ -214,7 +180,7 @@ async def fetch_pending_tasks(db: Client, limit: int = 10) -> list[TaskRecord]:
         .order("priority", desc=False)
         .order("created_at", desc=False)
         .limit(limit)
-        .execute
+        .execute()
     )
     rows: list[TaskRecord] = []
     raw_data = result.data or []
@@ -234,7 +200,7 @@ async def fetch_pending_tasks(db: Client, limit: int = 10) -> list[TaskRecord]:
 
 
 async def recover_stuck_tasks(
-    db: Client,
+    db: AsyncClient,
     max_running_minutes: int = 30,
     max_ai_running_minutes: int = 1440,
 ) -> int:
@@ -256,22 +222,18 @@ async def recover_stuck_tasks(
 
     # Параллельно: короткий таймаут для scrape/discover/pre_filter, длинный для ai
     raw_results = await asyncio.gather(
-        run_in_thread(
-            db.table("scrape_tasks")
-            .select("id, task_type, attempts, max_attempts")
-            .eq("status", "running")
-            .in_("task_type", ["full_scrape", "discover", "pre_filter"])
-            .lt("started_at", threshold)
-            .execute
-        ),
-        run_in_thread(
-            db.table("scrape_tasks")
-            .select("id, task_type, attempts, max_attempts")
-            .eq("status", "running")
-            .eq("task_type", "ai_analysis")
-            .lt("started_at", ai_threshold)
-            .execute
-        ),
+        db.table("scrape_tasks")
+        .select("id, task_type, attempts, max_attempts")
+        .eq("status", "running")
+        .in_("task_type", ["full_scrape", "discover", "pre_filter"])
+        .lt("started_at", threshold)
+        .execute(),
+        db.table("scrape_tasks")
+        .select("id, task_type, attempts, max_attempts")
+        .eq("status", "running")
+        .eq("task_type", "ai_analysis")
+        .lt("started_at", ai_threshold)
+        .execute(),
         return_exceptions=True,
     )
 
@@ -298,18 +260,18 @@ async def recover_stuck_tasks(
         max_attempts = int(task.get("max_attempts", 0) or 0)
         timeout = max_ai_running_minutes if task_type == "ai_analysis" else max_running_minutes
         if attempts >= max_attempts:
-            await run_in_thread(
+            await (
                 db.table("scrape_tasks").update({
                     "status": "failed",
                     "error_message": f"Stuck in running for >{timeout}min, max attempts exhausted",
-                }).eq("id", task_id).execute
+                }).eq("id", task_id).execute()
             )
             return False
-        await run_in_thread(
+        await (
             db.table("scrape_tasks").update({
                 "status": "pending",
                 "error_message": f"Recovered: stuck in running for >{timeout}min",
-            }).eq("id", task_id).execute
+            }).eq("id", task_id).execute()
         )
         return True
 
@@ -327,46 +289,46 @@ async def recover_stuck_tasks(
     return recovered
 
 
-async def cleanup_orphan_person(db: Client, person_id: str) -> None:
+async def cleanup_orphan_person(db: AsyncClient, person_id: str) -> None:
     """Удалить person без привязанных блогов (best-effort cleanup)."""
     try:
-        blogs = await run_in_thread(
-            db.table("blogs").select("id").eq("person_id", person_id).limit(1).execute
+        blogs = await (
+            db.table("blogs").select("id").eq("person_id", person_id).limit(1).execute()
         )
         if not blogs.data:
-            await run_in_thread(
-                db.table("persons").delete().eq("id", person_id).execute
+            await (
+                db.table("persons").delete().eq("id", person_id).execute()
             )
     except Exception as e:
         logger.warning(f"[cleanup_orphan] Ошибка очистки person {person_id}: {e}")
 
 
-async def upsert_blog(db: Client, blog_id: str, data: dict[str, Any]) -> None:
+async def upsert_blog(db: AsyncClient, blog_id: str, data: dict[str, Any]) -> None:
     """Обновить данные блога из скрапинга."""
-    await run_in_thread(
-        db.table("blogs").update(data).eq("id", blog_id).execute
+    await (
+        db.table("blogs").update(data).eq("id", blog_id).execute()
     )
 
 
-async def upsert_posts(db: Client, blog_id: str, posts: list[dict[str, Any]]) -> None:
+async def upsert_posts(db: AsyncClient, blog_id: str, posts: list[dict[str, Any]]) -> None:
     """Upsert постов блогера. ON CONFLICT (blog_id, platform_id) DO UPDATE."""
     if not posts:
         return
     rows = [{**post, "blog_id": blog_id} for post in posts]
-    await run_in_thread(
+    await (
         db.table("blog_posts").upsert(
             rows, on_conflict="blog_id,platform_id"
-        ).execute
+        ).execute()
     )
 
 
-async def upsert_highlights(db: Client, blog_id: str, highlights: list[dict[str, Any]]) -> None:
+async def upsert_highlights(db: AsyncClient, blog_id: str, highlights: list[dict[str, Any]]) -> None:
     """Upsert хайлайтов блогера."""
     if not highlights:
         return
     rows = [{**h, "blog_id": blog_id} for h in highlights]
-    await run_in_thread(
+    await (
         db.table("blog_highlights").upsert(
             rows, on_conflict="blog_id,platform_id"
-        ).execute
+        ).execute()
     )

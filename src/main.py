@@ -8,7 +8,7 @@ from typing import Any
 import uvicorn
 from loguru import logger
 from openai import AsyncOpenAI
-from supabase import create_client
+from supabase import create_async_client
 
 from src.api.app import create_app
 from src.config import load_settings
@@ -32,17 +32,21 @@ async def main() -> None:
 
     logger.info("Starting scraper worker")
 
-    # Ограниченный thread pool для asyncio.to_thread (Supabase, instagrapi).
-    # Без этого при пиковой нагрузке OS может отказать в создании тредов (EAGAIN).
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=10)
+    # Thread pool для asyncio.to_thread (HikerAPI/instagrapi).
+    # Supabase теперь использует AsyncClient (не требует тредов).
+    # 4 треда: 3 HikerAPI + 1 запас
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
     asyncio.get_running_loop().set_default_executor(executor)
 
-    # Supabase
-    db = create_client(settings.supabase_url, settings.supabase_service_key.get_secret_value())
+    # Supabase (async клиент — без тредов, без EAGAIN)
+    db = await create_async_client(settings.supabase_url, settings.supabase_service_key.get_secret_value())
 
-    # Персистить WARNING+ логи в Supabase
+    # Персистить WARNING+ логи в Supabase.
+    # Sink вызывается из loguru-треда (enqueue=True), поэтому передаём event loop
+    # для планирования async записей через run_coroutine_threadsafe.
+    loop = asyncio.get_running_loop()
     logger.add(
-        create_supabase_sink(db),
+        create_supabase_sink(db, loop),
         level="WARNING",
         enqueue=True,
         serialize=False,

@@ -4,9 +4,8 @@ from typing import Any
 
 import httpx
 from loguru import logger
-from supabase import Client
+from supabase import AsyncClient
 
-from src.database import run_in_thread
 from src.utils import is_safe_url, is_transient_network_error
 
 IMAGES_BUCKET = "blog-images"
@@ -98,12 +97,11 @@ UPLOAD_MAX_RETRIES = 3
 UPLOAD_RETRY_DELAY = 1.0  # секунды между попытками
 
 
-async def upload_image(db: Client, path: str, data: bytes, content_type: str) -> bool:
+async def upload_image(db: AsyncClient, path: str, data: bytes, content_type: str) -> bool:
     """Загрузить файл в Supabase Storage (upsert) с retry при транзиентных ошибках."""
     for attempt in range(1, UPLOAD_MAX_RETRIES + 1):
         try:
-            await run_in_thread(
-                db.storage.from_(IMAGES_BUCKET).upload,
+            await db.storage.from_(IMAGES_BUCKET).upload(
                 path,
                 data,
                 {"content-type": content_type, "upsert": "true"},
@@ -123,7 +121,7 @@ async def upload_image(db: Client, path: str, data: bytes, content_type: str) ->
 
 
 async def download_and_upload_image(
-    db: Client,
+    db: AsyncClient,
     http_client: httpx.AsyncClient,
     cdn_url: str,
     storage_path: str,
@@ -143,7 +141,7 @@ async def download_and_upload_image(
 
 
 async def persist_profile_images(
-    db: Client,
+    db: AsyncClient,
     supabase_url: str,
     blog_id: str,
     avatar_cdn_url: str | None,
@@ -214,16 +212,14 @@ async def persist_profile_images(
     return avatar_url, post_urls
 
 
-async def delete_blog_images(db: Client, blog_id: str) -> int:
+async def delete_blog_images(db: AsyncClient, blog_id: str) -> int:
     """Удалить изображения постов блога из Storage (аватар сохраняется). Вернуть количество удалённых."""
     if not _is_safe_storage_filename(blog_id):
         logger.warning(f"[image_storage] Пропускаем небезопасный blog_id: {blog_id}")
         return 0
 
     try:
-        files = await run_in_thread(
-            db.storage.from_(IMAGES_BUCKET).list, blog_id
-        )
+        files = await db.storage.from_(IMAGES_BUCKET).list(blog_id)
     except Exception as e:
         logger.error(f"[image_storage] Ошибка листинга файлов для blog={blog_id}: {e}")
         return 0
@@ -247,16 +243,12 @@ async def delete_blog_images(db: Client, blog_id: str) -> int:
         return 0
 
     try:
-        await run_in_thread(
-            db.storage.from_(IMAGES_BUCKET).remove, post_paths
-        )
+        await db.storage.from_(IMAGES_BUCKET).remove(post_paths)
         # Обнуляем thumbnail_url у постов, чтобы при rescrape загрузились новые
-        await run_in_thread(
-            db.table("blog_posts")
-            .update({"thumbnail_url": None})
-            .eq("blog_id", blog_id)
-            .execute
-        )
+        await db.table("blog_posts") \
+            .update({"thumbnail_url": None}) \
+            .eq("blog_id", blog_id) \
+            .execute()
         logger.debug(f"[image_storage] Удалено {len(post_paths)} файлов постов для blog={blog_id}")
         return len(post_paths)
     except Exception as e:

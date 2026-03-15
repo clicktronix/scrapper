@@ -8,10 +8,10 @@ from typing import Any
 
 from loguru import logger
 from openai import AsyncOpenAI
-from supabase import Client
+from supabase import AsyncClient
 
 from src.config import Settings
-from src.database import fetch_pending_tasks, mark_task_failed, run_in_thread
+from src.database import fetch_pending_tasks, mark_task_failed
 from src.models.db_types import TaskRecord
 from src.platforms.base import BaseScraper
 from src.utils import is_transient_network_error
@@ -52,7 +52,7 @@ def _resolve_handler(task_type: str) -> TaskHandler | None:
 
 async def _get_scraper(
     scrapers: dict[str, BaseScraper],
-    db: Client,
+    db: AsyncClient,
     task_id: str,
     attempts: int,
     max_attempts: int,
@@ -74,7 +74,7 @@ async def _get_scraper(
 
 
 async def process_task(
-    db: Client,
+    db: AsyncClient,
     task: TaskRecord,
     scrapers: dict[str, BaseScraper],
     openai_client: AsyncOpenAI,
@@ -138,16 +138,14 @@ async def process_task(
                 # mark_task_running уже инкрементировал attempts, откатываем назад.
                 logger.warning(f"Transient error in task {task_id}: {e}")
                 try:
-                    await run_in_thread(
-                        db.table("scrape_tasks").update({
-                            "status": "pending",
-                            "error_message": f"Transient error (retry shortly): {e}",
-                            "next_retry_at": (
-                                datetime.now(UTC) + timedelta(seconds=30)
-                            ).isoformat(),
-                            "attempts": attempts,  # откат инкремента
-                        }).eq("id", task_id).execute
-                    )
+                    await db.table("scrape_tasks").update({
+                        "status": "pending",
+                        "error_message": f"Transient error (retry shortly): {e}",
+                        "next_retry_at": (
+                            datetime.now(UTC) + timedelta(seconds=30)
+                        ).isoformat(),
+                        "attempts": attempts,  # откат инкремента
+                    }).eq("id", task_id).execute()
                 except Exception as fail_err:
                     logger.error(
                         f"Failed to reset transient task {task_id}: {fail_err}"
@@ -172,7 +170,7 @@ async def process_task(
 
 
 async def run_worker(
-    db: Client,
+    db: AsyncClient,
     scrapers: dict[str, BaseScraper],
     settings: Settings,
     shutdown_event: asyncio.Event,

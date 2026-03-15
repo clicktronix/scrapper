@@ -3,6 +3,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.conftest import make_db_mock
+
+
+def _make_async_db(*execute_results: MagicMock) -> MagicMock:
+    """Создать db mock с последовательными результатами execute()."""
+    db = make_db_mock()
+    if execute_results:
+        db.table.return_value.execute = AsyncMock(side_effect=list(execute_results))
+    return db
+
 
 class TestScheduleUpdates:
     """Тесты schedule_updates."""
@@ -11,15 +21,13 @@ class TestScheduleUpdates:
     async def test_creates_tasks_for_stale_blogs(self) -> None:
         from src.worker.scheduler import schedule_updates
 
-        mock_db = MagicMock()
         settings = MagicMock()
         settings.rescrape_days = 60
 
         # Вернуть 2 устаревших блога
         result_mock = MagicMock()
         result_mock.data = [{"id": "blog-1"}, {"id": "blog-2"}]
-        chain = mock_db.table.return_value.select.return_value.in_.return_value
-        chain.or_.return_value.order.return_value.limit.return_value.execute.return_value = result_mock
+        db = _make_async_db(result_mock)
 
         # Мок create_task_if_not_exists
         with patch(
@@ -27,31 +35,29 @@ class TestScheduleUpdates:
             new_callable=AsyncMock,
             return_value="task-id",
         ) as mock_create:
-            await schedule_updates(mock_db, settings)
+            await schedule_updates(db, settings)
 
             assert mock_create.call_count == 2
             # Проверяем priority=8 для re-scrape
-            mock_create.assert_any_call(mock_db, "blog-1", "full_scrape", priority=8)
-            mock_create.assert_any_call(mock_db, "blog-2", "full_scrape", priority=8)
+            mock_create.assert_any_call(db, "blog-1", "full_scrape", priority=8)
+            mock_create.assert_any_call(db, "blog-2", "full_scrape", priority=8)
 
     @pytest.mark.asyncio
     async def test_no_stale_blogs(self) -> None:
         from src.worker.scheduler import schedule_updates
 
-        mock_db = MagicMock()
         settings = MagicMock()
         settings.rescrape_days = 60
 
         result_mock = MagicMock()
         result_mock.data = []
-        chain = mock_db.table.return_value.select.return_value.in_.return_value
-        chain.or_.return_value.order.return_value.limit.return_value.execute.return_value = result_mock
+        db = _make_async_db(result_mock)
 
         with patch(
             "src.worker.scheduler.create_task_if_not_exists",
             new_callable=AsyncMock,
         ) as mock_create:
-            await schedule_updates(mock_db, settings)
+            await schedule_updates(db, settings)
 
             mock_create.assert_not_called()
 
@@ -64,22 +70,21 @@ class TestScheduleUpdatesRescrape:
         """Используется settings.rescrape_days вместо хардкода 60."""
         from src.worker.scheduler import schedule_updates
 
-        mock_db = MagicMock()
         settings = MagicMock()
         settings.rescrape_days = 90
 
         result_mock = MagicMock()
         result_mock.data = []
-        chain = mock_db.table.return_value.select.return_value.in_.return_value
-        chain.or_.return_value.order.return_value.limit.return_value.execute.return_value = result_mock
+        db = _make_async_db(result_mock)
 
         with patch(
             "src.worker.scheduler.create_task_if_not_exists",
             new_callable=AsyncMock,
         ):
-            await schedule_updates(mock_db, settings)
+            await schedule_updates(db, settings)
 
         # Проверяем, что фильтр включает и stale, и null scraped_at
+        chain = db.table.return_value
         chain.or_.assert_called_once()
 
     @pytest.mark.asyncio
@@ -87,22 +92,21 @@ class TestScheduleUpdatesRescrape:
         """Результаты отсортированы по подписчикам (desc)."""
         from src.worker.scheduler import schedule_updates
 
-        mock_db = MagicMock()
         settings = MagicMock()
         settings.rescrape_days = 60
 
         result_mock = MagicMock()
         result_mock.data = []
-        chain = mock_db.table.return_value.select.return_value.in_.return_value
-        chain.or_.return_value.order.return_value.limit.return_value.execute.return_value = result_mock
+        db = _make_async_db(result_mock)
 
         with patch(
             "src.worker.scheduler.create_task_if_not_exists",
             new_callable=AsyncMock,
         ):
-            await schedule_updates(mock_db, settings)
+            await schedule_updates(db, settings)
 
         # Проверяем вызов .order("followers_count", desc=True)
+        chain = db.table.return_value
         chain.or_.return_value.order.assert_called_once_with("followers_count", desc=True)
 
 
@@ -114,14 +118,12 @@ class TestScheduleUpdatesEdge:
         """create_task_if_not_exists возвращает None для дубликатов — счётчик не растёт."""
         from src.worker.scheduler import schedule_updates
 
-        mock_db = MagicMock()
         settings = MagicMock()
         settings.rescrape_days = 60
 
         result_mock = MagicMock()
         result_mock.data = [{"id": "blog-1"}, {"id": "blog-2"}]
-        chain = mock_db.table.return_value.select.return_value.in_.return_value
-        chain.or_.return_value.order.return_value.limit.return_value.execute.return_value = result_mock
+        db = _make_async_db(result_mock)
 
         with patch(
             "src.worker.scheduler.create_task_if_not_exists",
@@ -129,7 +131,7 @@ class TestScheduleUpdatesEdge:
             # Первый — новая задача, второй — уже существует
             side_effect=["task-new", None],
         ) as mock_create:
-            await schedule_updates(mock_db, settings)
+            await schedule_updates(db, settings)
             assert mock_create.call_count == 2
 
     @pytest.mark.asyncio
@@ -137,21 +139,20 @@ class TestScheduleUpdatesEdge:
         """Фильтр учитывает блоги без scraped_at (NULL)."""
         from src.worker.scheduler import schedule_updates
 
-        mock_db = MagicMock()
         settings = MagicMock()
         settings.rescrape_days = 60
 
         result_mock = MagicMock()
         result_mock.data = []
-        chain = mock_db.table.return_value.select.return_value.in_.return_value
-        chain.or_.return_value.order.return_value.limit.return_value.execute.return_value = result_mock
+        db = _make_async_db(result_mock)
 
         with patch(
             "src.worker.scheduler.create_task_if_not_exists",
             new_callable=AsyncMock,
         ):
-            await schedule_updates(mock_db, settings)
+            await schedule_updates(db, settings)
 
+        chain = db.table.return_value
         filter_arg = chain.or_.call_args.args[0]
         assert "scraped_at.is.null" in filter_arg
         assert "scraped_at.lt." in filter_arg
@@ -165,7 +166,6 @@ class TestRetryStaleBatchesEdge:
         """mark_task_failed получает attempts/max_attempts из задачи, не дефолты."""
         from src.worker.scheduler import retry_stale_batches
 
-        mock_db = MagicMock()
         mock_openai = MagicMock()
         settings = MagicMock()
 
@@ -173,15 +173,14 @@ class TestRetryStaleBatchesEdge:
             {"id": "t1", "blog_id": "b1", "payload": {}, "attempts": 3, "max_attempts": 5},
         ]
 
-        with (
-            patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run,
-            patch("src.worker.scheduler.mark_task_failed", new_callable=AsyncMock) as mock_fail,
-        ):
-            mock_run.return_value = MagicMock(data=stale_tasks)
-            await retry_stale_batches(mock_db, mock_openai, settings)
+        result_mock = MagicMock(data=stale_tasks)
+        db = _make_async_db(result_mock)
+
+        with patch("src.worker.scheduler.mark_task_failed", new_callable=AsyncMock) as mock_fail:
+            await retry_stale_batches(db, mock_openai, settings)
 
             mock_fail.assert_called_once_with(
-                mock_db, "t1", 3, 5,
+                db, "t1", 3, 5,
                 "Batch not completed in 25h (exceeded OpenAI 24h window)", retry=True,
             )
 
@@ -268,19 +267,18 @@ class TestPollBatches:
     async def test_no_running_tasks(self) -> None:
         from src.worker.scheduler import poll_batches
 
-        mock_db = MagicMock()
         mock_openai = MagicMock()
 
-        with patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = MagicMock(data=[])
-            await poll_batches(mock_db, mock_openai)
-            mock_run.assert_called_once()
+        result_mock = MagicMock(data=[])
+        db = _make_async_db(result_mock)
+
+        await poll_batches(db, mock_openai)
+        db.table.return_value.execute.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_groups_by_batch_id(self) -> None:
         from src.worker.scheduler import poll_batches
 
-        mock_db = MagicMock()
         mock_openai = MagicMock()
 
         tasks = [
@@ -292,12 +290,11 @@ class TestPollBatches:
              "attempts": 2, "max_attempts": 3},
         ]
 
-        with (
-            patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run,
-            patch("src.worker.scheduler.handle_batch_results", new_callable=AsyncMock) as mock_handle,
-        ):
-            mock_run.return_value = MagicMock(data=tasks)
-            await poll_batches(mock_db, mock_openai)
+        result_mock = MagicMock(data=tasks)
+        db = _make_async_db(result_mock)
+
+        with patch("src.worker.scheduler.handle_batch_results", new_callable=AsyncMock) as mock_handle:
+            await poll_batches(db, mock_openai)
 
             assert mock_handle.call_count == 2
             # Проверяем batch_id аргументы
@@ -316,7 +313,6 @@ class TestPollBatches:
     async def test_skips_tasks_without_batch_id(self) -> None:
         from src.worker.scheduler import poll_batches
 
-        mock_db = MagicMock()
         mock_openai = MagicMock()
 
         tasks = [
@@ -324,12 +320,12 @@ class TestPollBatches:
             {"id": "t2", "blog_id": "b2", "payload": None},
         ]
 
-        with (
-            patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run,
-            patch("src.worker.scheduler.handle_batch_results", new_callable=AsyncMock) as mock_handle,
-        ):
-            mock_run.return_value = MagicMock(data=tasks)
-            await poll_batches(mock_db, mock_openai)
+        # 1 вызов execute для select + 2 вызова для orphaned задач (update)
+        result_mock = MagicMock(data=tasks)
+        db = _make_async_db(result_mock, MagicMock(), MagicMock())
+
+        with patch("src.worker.scheduler.handle_batch_results", new_callable=AsyncMock) as mock_handle:
+            await poll_batches(db, mock_openai)
 
             mock_handle.assert_not_called()
 
@@ -338,7 +334,6 @@ class TestPollBatches:
         """Ошибка в одном батче не должна мешать другим."""
         from src.worker.scheduler import poll_batches
 
-        mock_db = MagicMock()
         mock_openai = MagicMock()
 
         tasks = [
@@ -346,14 +341,13 @@ class TestPollBatches:
             {"id": "t2", "blog_id": "b2", "payload": {"batch_id": "batch-ok"}},
         ]
 
-        with (
-            patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run,
-            patch("src.worker.scheduler.handle_batch_results", new_callable=AsyncMock) as mock_handle,
-        ):
-            mock_run.return_value = MagicMock(data=tasks)
+        result_mock = MagicMock(data=tasks)
+        db = _make_async_db(result_mock)
+
+        with patch("src.worker.scheduler.handle_batch_results", new_callable=AsyncMock) as mock_handle:
             # Первый батч падает, второй проходит
             mock_handle.side_effect = [RuntimeError("fail"), None]
-            await poll_batches(mock_db, mock_openai)
+            await poll_batches(db, mock_openai)
 
             assert mock_handle.call_count == 2
 
@@ -362,7 +356,6 @@ class TestPollBatches:
         """Если в батче несколько задач на один blog_id, передаются обе."""
         from src.worker.scheduler import poll_batches
 
-        mock_db = MagicMock()
         mock_openai = MagicMock()
 
         tasks = [
@@ -370,12 +363,11 @@ class TestPollBatches:
             {"id": "t2", "blog_id": "b1", "payload": {"batch_id": "batch-A"}, "attempts": 2, "max_attempts": 3},
         ]
 
-        with (
-            patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run,
-            patch("src.worker.scheduler.handle_batch_results", new_callable=AsyncMock) as mock_handle,
-        ):
-            mock_run.return_value = MagicMock(data=tasks)
-            await poll_batches(mock_db, mock_openai)
+        result_mock = MagicMock(data=tasks)
+        db = _make_async_db(result_mock)
+
+        with patch("src.worker.scheduler.handle_batch_results", new_callable=AsyncMock) as mock_handle:
+            await poll_batches(db, mock_openai)
 
             mock_handle.assert_called_once()
             task_map = mock_handle.call_args.args[3]
@@ -390,20 +382,19 @@ class TestRetryStaleBatches:
     async def test_no_stale_tasks(self) -> None:
         from src.worker.scheduler import retry_stale_batches
 
-        mock_db = MagicMock()
         mock_openai = MagicMock()
         settings = MagicMock()
 
-        with patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = MagicMock(data=[])
-            await retry_stale_batches(mock_db, mock_openai, settings)
-            mock_run.assert_called_once()
+        result_mock = MagicMock(data=[])
+        db = _make_async_db(result_mock)
+
+        await retry_stale_batches(db, mock_openai, settings)
+        db.table.return_value.execute.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_retries_stale_tasks(self) -> None:
         from src.worker.scheduler import retry_stale_batches
 
-        mock_db = MagicMock()
         mock_openai = MagicMock()
         settings = MagicMock()
 
@@ -412,19 +403,18 @@ class TestRetryStaleBatches:
             {"id": "t2", "blog_id": "b2", "payload": {}, "attempts": 2, "max_attempts": 3},
         ]
 
-        with (
-            patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run,
-            patch("src.worker.scheduler.mark_task_failed", new_callable=AsyncMock) as mock_fail,
-        ):
-            mock_run.return_value = MagicMock(data=stale_tasks)
-            await retry_stale_batches(mock_db, mock_openai, settings)
+        result_mock = MagicMock(data=stale_tasks)
+        db = _make_async_db(result_mock)
+
+        with patch("src.worker.scheduler.mark_task_failed", new_callable=AsyncMock) as mock_fail:
+            await retry_stale_batches(db, mock_openai, settings)
 
             assert mock_fail.call_count == 2
-            # Проверяем, что передаётся retry=True и сообщение о 4ч
+            # Проверяем, что передаётся retry=True и сообщение о 25ч
             for call_obj in mock_fail.call_args_list:
                 assert call_obj.kwargs.get("retry") is True
                 # Позиционные аргументы: db, task_id, attempts, max_attempts, error
-                assert "4h" in call_obj.args[4]
+                assert "25h" in call_obj.args[4]
 
 
 class TestRecoverTasks:
@@ -449,38 +439,33 @@ class TestCleanupOldImages:
     async def test_deletes_images_for_stale_blogs(self) -> None:
         from src.worker.scheduler import cleanup_old_images
 
-        mock_db = MagicMock()
         settings = MagicMock()
         settings.rescrape_days = 60
 
-        with (
-            patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run,
-            patch("src.worker.scheduler.delete_blog_images", new_callable=AsyncMock) as mock_delete,
-        ):
-            mock_run.return_value = MagicMock(data=[{"id": "blog-1"}, {"id": "blog-2"}])
+        result_mock = MagicMock(data=[{"id": "blog-1"}, {"id": "blog-2"}])
+        db = _make_async_db(result_mock)
+
+        with patch("src.worker.scheduler.delete_blog_images", new_callable=AsyncMock) as mock_delete:
             mock_delete.side_effect = [3, 2]
 
-            await cleanup_old_images(mock_db, settings)
+            await cleanup_old_images(db, settings)
 
             assert mock_delete.call_count == 2
-            mock_delete.assert_any_call(mock_db, "blog-1")
-            mock_delete.assert_any_call(mock_db, "blog-2")
+            mock_delete.assert_any_call(db, "blog-1")
+            mock_delete.assert_any_call(db, "blog-2")
 
     @pytest.mark.asyncio
     async def test_no_stale_blogs(self) -> None:
         from src.worker.scheduler import cleanup_old_images
 
-        mock_db = MagicMock()
         settings = MagicMock()
         settings.rescrape_days = 60
 
-        with (
-            patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run,
-            patch("src.worker.scheduler.delete_blog_images", new_callable=AsyncMock) as mock_delete,
-        ):
-            mock_run.return_value = MagicMock(data=[])
+        result_mock = MagicMock(data=[])
+        db = _make_async_db(result_mock)
 
-            await cleanup_old_images(mock_db, settings)
+        with patch("src.worker.scheduler.delete_blog_images", new_callable=AsyncMock) as mock_delete:
+            await cleanup_old_images(db, settings)
 
             mock_delete.assert_not_called()
 
@@ -489,19 +474,17 @@ class TestCleanupOldImages:
         """Ошибка delete_blog_images для одного блога не мешает другим."""
         from src.worker.scheduler import cleanup_old_images
 
-        mock_db = MagicMock()
         settings = MagicMock()
         settings.rescrape_days = 60
 
-        with (
-            patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run,
-            patch("src.worker.scheduler.delete_blog_images", new_callable=AsyncMock) as mock_delete,
-        ):
-            mock_run.return_value = MagicMock(data=[{"id": "blog-1"}, {"id": "blog-2"}])
+        result_mock = MagicMock(data=[{"id": "blog-1"}, {"id": "blog-2"}])
+        db = _make_async_db(result_mock)
+
+        with patch("src.worker.scheduler.delete_blog_images", new_callable=AsyncMock) as mock_delete:
             # Первый блог — ошибка, второй — OK
             mock_delete.side_effect = [0, 5]
 
-            await cleanup_old_images(mock_db, settings)
+            await cleanup_old_images(db, settings)
 
             assert mock_delete.call_count == 2
 
@@ -514,7 +497,6 @@ class TestRetryMissingEmbeddings:
         from src.ai.schemas import AIInsights
         from src.worker.scheduler import retry_missing_embeddings
 
-        mock_db = MagicMock()
         mock_openai = MagicMock()
 
         insights_data = AIInsights(
@@ -522,19 +504,16 @@ class TestRetryMissingEmbeddings:
             tags=["видео-контент", "reels", "юмор"],
         ).model_dump()
 
-        with (
-            patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run,
-            patch("src.worker.scheduler.generate_embedding", new_callable=AsyncMock) as mock_embed,
-        ):
-            mock_run.side_effect = [
-                # Первый вызов — запрос блогов без embedding
-                MagicMock(data=[{"id": "blog-1", "ai_insights": insights_data}]),
-                # Второй вызов — update embedding
-                MagicMock(),
-            ]
+        # Первый вызов — запрос блогов без embedding, второй — update embedding
+        db = _make_async_db(
+            MagicMock(data=[{"id": "blog-1", "ai_insights": insights_data}]),
+            MagicMock(),
+        )
+
+        with patch("src.worker.scheduler.generate_embedding", new_callable=AsyncMock) as mock_embed:
             mock_embed.return_value = [0.1] * 1536
 
-            await retry_missing_embeddings(mock_db, mock_openai)
+            await retry_missing_embeddings(db, mock_openai)
 
             mock_embed.assert_called_once()
 
@@ -542,36 +521,34 @@ class TestRetryMissingEmbeddings:
     async def test_no_blogs_without_embedding(self) -> None:
         from src.worker.scheduler import retry_missing_embeddings
 
-        mock_db = MagicMock()
         mock_openai = MagicMock()
 
-        with patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = MagicMock(data=[])
+        result_mock = MagicMock(data=[])
+        db = _make_async_db(result_mock)
 
-            await retry_missing_embeddings(mock_db, mock_openai)
-            # Только один вызов (запрос блогов), без update
-            mock_run.assert_called_once()
+        await retry_missing_embeddings(db, mock_openai)
+        # Только один вызов (запрос блогов), без update
+        db.table.return_value.execute.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_error_in_one_blog_does_not_crash(self) -> None:
         from src.ai.schemas import AIInsights
         from src.worker.scheduler import retry_missing_embeddings
 
-        mock_db = MagicMock()
         mock_openai = MagicMock()
 
-        with (
-            patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run,
-            patch("src.worker.scheduler.generate_embedding", new_callable=AsyncMock) as mock_embed,
-        ):
-            mock_run.return_value = MagicMock(data=[
-                {"id": "blog-1", "ai_insights": {"invalid": True}},
-                {"id": "blog-2", "ai_insights": AIInsights(short_summary="OK").model_dump()},
-            ])
+        result_mock = MagicMock(data=[
+            {"id": "blog-1", "ai_insights": {"invalid": True}},
+            {"id": "blog-2", "ai_insights": AIInsights(short_summary="OK").model_dump()},
+        ])
+        # Для blog-2: update embedding
+        db = _make_async_db(result_mock, MagicMock())
+
+        with patch("src.worker.scheduler.generate_embedding", new_callable=AsyncMock) as mock_embed:
             mock_embed.return_value = [0.1] * 1536
 
             # Не должно падать
-            await retry_missing_embeddings(mock_db, mock_openai)
+            await retry_missing_embeddings(db, mock_openai)
 
 
 class TestRetryTaxonomyMappings:
@@ -581,23 +558,23 @@ class TestRetryTaxonomyMappings:
     async def test_retry_taxonomy_calls_matchers(self) -> None:
         from src.worker.scheduler import retry_taxonomy_mappings
 
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
+
         blogs_result = MagicMock(data=[{
             "id": "blog-1",
             "ai_insights": {"tags": ["видео-контент", "reels", "юмор"]},
         }])
+        cats_result = MagicMock(data=[])
+
+        # 2 вызова execute(): blogs query + blog_categories query
+        mock_db.table.return_value.execute = AsyncMock(side_effect=[blogs_result, cats_result])
 
         with (
-            patch("src.worker.scheduler.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.scheduler.load_categories", new_callable=AsyncMock, return_value={}),
             patch("src.worker.scheduler.load_tags", new_callable=AsyncMock, return_value={}),
             patch("src.worker.scheduler.match_categories", new_callable=AsyncMock) as mock_match_categories,
             patch("src.worker.scheduler.match_tags", new_callable=AsyncMock) as mock_match_tags,
         ):
-            mock_run.side_effect = [
-                blogs_result,  # blogs query
-                MagicMock(data=[]),  # blog_categories query (no existing matches)
-            ]
             await retry_taxonomy_mappings(mock_db)
 
             mock_match_categories.assert_called_once()

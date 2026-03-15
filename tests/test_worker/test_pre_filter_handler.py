@@ -109,20 +109,15 @@ def _no_blog_result() -> MagicMock:
     return result
 
 
-def _wrap_with_blog_check(side_effect_fn=None):
-    """Обернуть side_effect run_in_thread: первый вызов — проверка блога (пустой), остальные — по side_effect_fn."""
-    call_count = 0
+def _setup_db_execute(*results: MagicMock) -> MagicMock:
+    """Создать db mock с последовательными результатами execute().
 
-    async def wrapper(func, *args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return _no_blog_result()
-        if side_effect_fn:
-            return await side_effect_fn(func, *args, **kwargs)
-        return MagicMock()
-
-    return wrapper
+    Каждый вызов await db.table(...).execute() возвращает следующий результат.
+    """
+    db = make_db_mock()
+    if results:
+        db.table.return_value.execute = AsyncMock(side_effect=list(results))
+    return db
 
 
 def _pf_settings(**overrides) -> MagicMock:
@@ -145,18 +140,17 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "private_user"})
-        db = make_db_mock()
+        # 3 вызова execute(): проверка блога + update задачи + upsert в pre_filter_log
+        db = _setup_db_execute(_no_blog_result(), MagicMock(), MagicMock())
         scraper = _make_scraper(_make_user_info(is_private=True))
 
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=_wrap_with_blog_check()) as mock_run,
         ):
             await handle_pre_filter(db, task, scraper, _pf_settings())
 
-            # 3 вызова run_in_thread: проверка блога + update задачи + upsert в pre_filter_log
-            assert mock_run.call_count == 3
+            assert db.table.return_value.execute.call_count == 3
             update_data = db.table.return_value.update.call_args_list[0][0][0]
             assert update_data["status"] == "done"
             assert update_data["error_message"] == "filtered_out: private"
@@ -173,7 +167,7 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "low_eng_user"})
-        db = make_db_mock()
+        db = _setup_db_execute(_no_blog_result(), MagicMock(), MagicMock())
         scraper = _make_scraper(
             _make_user_info(),
             posts=_make_medias(count=3, like_count=10),
@@ -183,7 +177,6 @@ class TestHandlePreFilter:
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=_wrap_with_blog_check()),
         ):
             await handle_pre_filter(db, task, scraper, _pf_settings())
 
@@ -197,7 +190,7 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "inactive_user"})
-        db = make_db_mock()
+        db = _setup_db_execute(_no_blog_result(), MagicMock(), MagicMock())
         old_date = datetime.now(UTC) - timedelta(days=200)
         scraper = _make_scraper(
             _make_user_info(),
@@ -208,7 +201,6 @@ class TestHandlePreFilter:
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=_wrap_with_blog_check()),
         ):
             await handle_pre_filter(db, task, scraper, _pf_settings())
 
@@ -222,7 +214,7 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "inactive_iso_user"})
-        db = make_db_mock()
+        db = _setup_db_execute(_no_blog_result(), MagicMock(), MagicMock())
         old_date_iso = (datetime.now(UTC) - timedelta(days=200)).replace(tzinfo=None).isoformat()
         posts = [[{"like_count": 100, "taken_at": old_date_iso}], None]
         scraper = _make_scraper(_make_user_info(), posts=posts, clips=_empty_medias())
@@ -230,7 +222,6 @@ class TestHandlePreFilter:
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=_wrap_with_blog_check()),
         ):
             await handle_pre_filter(db, task, scraper, _pf_settings())
 
@@ -244,7 +235,6 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "reels_user"})
-        db = make_db_mock()
         old_date = datetime.now(UTC) - timedelta(days=200)
         recent_date = datetime.now(UTC) - timedelta(days=5)
         scraper = _make_scraper(
@@ -257,19 +247,13 @@ class TestHandlePreFilter:
         person_result.data = [{"id": "person-1"}]
         blog_result = MagicMock()
         blog_result.data = [{"id": "blog-1"}]
-        insert_count = 0
 
-        async def mock_rit(func, *args, **kwargs):
-            nonlocal insert_count
-            insert_count += 1
-            if insert_count == 1:
-                return _no_blog_result()
-            return person_result if insert_count == 2 else blog_result
+        # execute(): проверка блога (пусто) + insert person + insert blog
+        db = _setup_db_execute(_no_blog_result(), person_result, blog_result)
 
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=mock_rit),
             patch(f"{_MOD}._h.mark_task_done", new_callable=AsyncMock) as mock_done,
         ):
             await handle_pre_filter(db, task, scraper, _pf_settings())
@@ -282,13 +266,12 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "empty_user"})
-        db = make_db_mock()
+        db = _setup_db_execute(_no_blog_result(), MagicMock(), MagicMock())
         scraper = _make_scraper(_make_user_info(), posts=_empty_medias(), clips=_empty_medias())
 
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=_wrap_with_blog_check()),
         ):
             await handle_pre_filter(db, task, scraper, _pf_settings())
 
@@ -302,7 +285,6 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "good_user"})
-        db = make_db_mock()
         scraper = _make_scraper(
             _make_user_info(
                 full_name="Good User",
@@ -326,19 +308,12 @@ class TestHandlePreFilter:
         person_result.data = [{"id": "person-1"}]
         blog_result = MagicMock()
         blog_result.data = [{"id": "blog-1"}]
-        insert_count = 0
 
-        async def mock_rit(func, *args, **kwargs):
-            nonlocal insert_count
-            insert_count += 1
-            if insert_count == 1:
-                return _no_blog_result()
-            return person_result if insert_count == 2 else blog_result
+        db = _setup_db_execute(_no_blog_result(), person_result, blog_result)
 
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=mock_rit),
             patch(f"{_MOD}._h.mark_task_done", new_callable=AsyncMock) as mock_done,
         ):
             await handle_pre_filter(db, task, scraper, _pf_settings())
@@ -372,13 +347,12 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "ghost_user"})
-        db = make_db_mock()
+        db = _setup_db_execute(_no_blog_result(), MagicMock(), MagicMock())
         scraper = _make_scraper(UserNotFound())
 
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=_wrap_with_blog_check()),
         ):
             await handle_pre_filter(db, task, scraper, _pf_settings())
 
@@ -392,12 +366,12 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "test_user"})
-        db = make_db_mock()
+        # execute() для проверки блога
+        db = _setup_db_execute(_no_blog_result())
         scraper = _make_scraper(InsufficientBalanceError("No balance"))
 
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, return_value=_no_blog_result()),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
             patch(f"{_MOD}._h.mark_task_failed", new_callable=AsyncMock) as mock_failed,
         ):
@@ -413,18 +387,17 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "deleted_user"})
-        db = make_db_mock()
+        # 3 вызова execute(): проверка блога + update задачи + upsert в pre_filter_log
+        db = _setup_db_execute(_no_blog_result(), MagicMock(), MagicMock())
         scraper = _make_scraper(HikerAPIError(404, "Target user not found"))
 
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=_wrap_with_blog_check()) as mock_run,
         ):
             await handle_pre_filter(db, task, scraper, _pf_settings())
 
-            # 3 вызова run_in_thread: проверка блога + update задачи + upsert в pre_filter_log
-            assert mock_run.call_count == 3
+            assert db.table.return_value.execute.call_count == 3
             update_data = db.table.return_value.update.call_args_list[0][0][0]
             assert update_data["status"] == "done"
             assert update_data["error_message"] == "filtered_out: not_found"
@@ -441,7 +414,8 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "empty_acct"})
-        db = make_db_mock()
+        # 3 вызова execute(): проверка блога + update задачи + upsert в pre_filter_log
+        db = _setup_db_execute(_no_blog_result(), MagicMock(), MagicMock())
         scraper = _make_scraper(
             _make_user_info(follower_count=5000),
             posts=HikerAPIError(404, "Entries not found"),
@@ -450,11 +424,10 @@ class TestHandlePreFilter:
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=_wrap_with_blog_check()) as mock_run,
         ):
             await handle_pre_filter(db, task, scraper, _pf_settings())
 
-            assert mock_run.call_count == 3
+            assert db.table.return_value.execute.call_count == 3
             update_data = db.table.return_value.update.call_args_list[0][0][0]
             assert update_data["status"] == "done"
             assert update_data["error_message"] == "filtered_out: not_found"
@@ -469,7 +442,6 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "big_blogger"})
-        db = make_db_mock()
         # like_count=3 фиктивный, но like_and_view_counts_disabled=True
         scraper = _make_scraper(
             _make_user_info(follower_count=1_000_000),
@@ -481,19 +453,12 @@ class TestHandlePreFilter:
         person_result.data = [{"id": "person-1"}]
         blog_result = MagicMock()
         blog_result.data = [{"id": "blog-1"}]
-        insert_count = 0
 
-        async def mock_rit(func, *args, **kwargs):
-            nonlocal insert_count
-            insert_count += 1
-            if insert_count == 1:
-                return _no_blog_result()
-            return person_result if insert_count == 2 else blog_result
+        db = _setup_db_execute(_no_blog_result(), person_result, blog_result)
 
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=mock_rit),
             patch(f"{_MOD}._h.mark_task_done", new_callable=AsyncMock) as mock_done,
         ):
             await handle_pre_filter(db, task, scraper, _pf_settings())
@@ -506,7 +471,7 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "small_blogger"})
-        db = make_db_mock()
+        db = _setup_db_execute(_no_blog_result(), MagicMock(), MagicMock())
         # 15k подписчиков, avg_likes=10 → ER = 0.067% > 0.01%, данные надёжные
         scraper = _make_scraper(
             _make_user_info(follower_count=15_000),
@@ -517,7 +482,6 @@ class TestHandlePreFilter:
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=_wrap_with_blog_check()),
         ):
             await handle_pre_filter(db, task, scraper, _pf_settings())
 
@@ -531,7 +495,6 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "hidden_likes_user"})
-        db = make_db_mock()
         # 200K подписчиков, like_count=5 (фейковый от HikerAPI), флаг НЕ выставлен
         scraper = _make_scraper(
             _make_user_info(follower_count=200_000),
@@ -543,19 +506,12 @@ class TestHandlePreFilter:
         person_result.data = [{"id": "person-1"}]
         blog_result = MagicMock()
         blog_result.data = [{"id": "blog-1"}]
-        insert_count = 0
 
-        async def mock_rit(func, *args, **kwargs):
-            nonlocal insert_count
-            insert_count += 1
-            if insert_count == 1:
-                return _no_blog_result()
-            return person_result if insert_count == 2 else blog_result
+        db = _setup_db_execute(_no_blog_result(), person_result, blog_result)
 
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=mock_rit),
             patch(f"{_MOD}._h.mark_task_done", new_callable=AsyncMock) as mock_done,
         ):
             await handle_pre_filter(db, task, scraper, _pf_settings())
@@ -568,7 +524,7 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "small_shop"})
-        db = make_db_mock()
+        db = _setup_db_execute(_no_blog_result(), MagicMock(), MagicMock())
         # 40K подписчиков, like_count=5 → ER = 0.0125%, но <50K → не hidden likes
         scraper = _make_scraper(
             _make_user_info(follower_count=40_000),
@@ -579,7 +535,6 @@ class TestHandlePreFilter:
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=_wrap_with_blog_check()),
         ):
             await handle_pre_filter(db, task, scraper, _pf_settings())
 
@@ -610,17 +565,16 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "private_hiker"})
-        db = make_db_mock()
+        db = _setup_db_execute(_no_blog_result(), MagicMock(), MagicMock())
         scraper = _make_scraper(PrivateAccountError("This account is private"))
 
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=_wrap_with_blog_check()) as mock_run,
         ):
             await handle_pre_filter(db, task, scraper, _pf_settings())
 
-            assert mock_run.call_count == 3
+            assert db.table.return_value.execute.call_count == 3
             update_data = db.table.return_value.update.call_args_list[0][0][0]
             assert update_data["status"] == "done"
             assert update_data["error_message"] == "filtered_out: private"
@@ -634,12 +588,11 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "cooldown_user"})
-        db = make_db_mock()
+        db = _setup_db_execute(_no_blog_result())
         scraper = _make_scraper(AllAccountsCooldownError("All accounts on cooldown"))
 
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, return_value=_no_blog_result()),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
             patch(f"{_MOD}._h.mark_task_failed", new_callable=AsyncMock) as mock_failed,
         ):
@@ -654,7 +607,6 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "error_user"})
-        db = make_db_mock()
         scraper = _make_scraper(
             _make_user_info(follower_count=50000),
             posts=_make_medias(count=5, like_count=100),
@@ -662,22 +614,17 @@ class TestHandlePreFilter:
 
         person_result = MagicMock()
         person_result.data = [{"id": "person-orphan"}]
-        insert_count = 0
 
-        async def mock_rit(func, *args, **kwargs):
-            nonlocal insert_count
-            insert_count += 1
-            if insert_count == 1:
-                return _no_blog_result()
-            if insert_count == 2:
-                return person_result
-            # Третий вызов (blogs insert) — ошибка
-            raise RuntimeError("DB connection lost")
+        # execute(): проверка блога + insert person + insert blog (ошибка)
+        db = _setup_db_execute(
+            _no_blog_result(),
+            person_result,
+            RuntimeError("DB connection lost"),
+        )
 
         with (
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread),
             patch(f"{_MOD}._h.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, side_effect=mock_rit),
             patch(f"{_MOD}._h.cleanup_orphan_person", new_callable=AsyncMock) as mock_cleanup,
             patch(f"{_MOD}._h.mark_task_failed", new_callable=AsyncMock) as mock_failed,
         ):
@@ -693,15 +640,14 @@ class TestHandlePreFilter:
         from src.worker.pre_filter_handler import handle_pre_filter
 
         task = make_task("pre_filter", blog_id=None, payload={"username": "existing_user"})
-        db = make_db_mock()
         scraper = _make_scraper(_make_user_info())
 
-        # run_in_thread возвращает результат с данными (блог найден)
+        # execute() возвращает результат с данными (блог найден)
         existing_result = MagicMock()
         existing_result.data = [{"id": "blog-existing"}]
+        db = _setup_db_execute(existing_result)
 
         with (
-            patch(f"{_MOD}._h.run_in_thread", new_callable=AsyncMock, return_value=existing_result),
             patch(f"{_MOD}._h.mark_task_done", new_callable=AsyncMock) as mock_done,
             patch(f"{_MOD}.asyncio.to_thread", side_effect=_mock_to_thread) as mock_api,
         ):

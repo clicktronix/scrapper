@@ -1,7 +1,7 @@
 """Общие фикстуры и фабрики для тестов скрапера."""
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from src.models.blog import ScrapedHighlight, ScrapedPost, ScrapedProfile
 
@@ -46,16 +46,21 @@ def make_db_mock() -> MagicMock:
     table_mock.neq.return_value = table_mock
     table_mock.in_.return_value = table_mock
     table_mock.not_.is_.return_value = table_mock
+    table_mock.not_.in_.return_value = table_mock
     table_mock.lt.return_value = table_mock
     table_mock.gt.return_value = table_mock
+    table_mock.or_.return_value = table_mock
+    table_mock.is_.return_value = table_mock
     table_mock.update.return_value = table_mock
     table_mock.insert.return_value = table_mock
     table_mock.upsert.return_value = table_mock
     table_mock.delete.return_value = table_mock
     table_mock.order.return_value = table_mock
     table_mock.limit.return_value = table_mock
-    table_mock.execute.return_value = MagicMock(data=[])
-    db.rpc.return_value.execute.return_value = MagicMock()
+    table_mock.execute = AsyncMock(return_value=MagicMock(data=[]))
+    rpc_mock = MagicMock()
+    rpc_mock.execute = AsyncMock(return_value=MagicMock())
+    db.rpc.return_value = rpc_mock
     return db
 
 

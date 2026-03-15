@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 from loguru import logger
 from openai import AsyncOpenAI
 from pydantic import ValidationError
-from supabase import create_client
+from supabase import create_async_client
 
 from src.ai.embedding import build_embedding_text, generate_embedding
 from src.ai.schemas import AIInsights
@@ -37,7 +37,7 @@ async def main(dry_run: bool = False, limit: int | None = None) -> None:
     supabase_key = os.environ["SUPABASE_SERVICE_KEY"]
     openai_key = os.environ["OPENAI_API_KEY"]
 
-    db = create_client(supabase_url, supabase_key)
+    db = await create_async_client(supabase_url, supabase_key)
     openai_client = AsyncOpenAI(api_key=openai_key)
 
     # Запрос всех блогов с ai_insights
@@ -51,7 +51,7 @@ async def main(dry_run: bool = False, limit: int | None = None) -> None:
     if limit:
         query = query.limit(limit)
 
-    result = query.execute()
+    result = await query.execute()
     blogs = result.data
 
     logger.info(f"Найдено {len(blogs)} блогов с ai_insights" + (f" (limit={limit})" if limit else ""))
@@ -93,8 +93,7 @@ async def main(dry_run: bool = False, limit: int | None = None) -> None:
             await asyncio.sleep(1.0)  # Backoff при ошибке (возможно rate limit)
             continue
 
-        # NB: синхронный Supabase SDK — скрипт однопоточный, блокировка event loop допустима
-        db.table("blogs").update({"embedding": vector}).eq("id", blog_id).execute()
+        await db.table("blogs").update({"embedding": vector}).eq("id", blog_id).execute()
         regenerated += 1
         await asyncio.sleep(0.05)  # Защита от rate limit OpenAI
 

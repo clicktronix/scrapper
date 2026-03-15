@@ -3,7 +3,7 @@
 Реализации в scrape_handler.py, ai_handler.py, discover_handler.py.
 
 Внешние зависимости импортируются ДО подмодулей, чтобы:
-1. Тесты могли патчить через ``src.worker.handlers.run_in_thread`` и т.д.
+1. Тесты могли патчить через ``src.worker.handlers.mark_task_failed`` и т.д.
 2. Подмодули получали те же ссылки через ``import src.worker.handlers as _h``
    (разрешается без цикла, т.к. к моменту импорта подмодулей атрибуты уже связаны).
 
@@ -30,7 +30,6 @@ from src.database import (  # noqa: F401
     mark_task_done,
     mark_task_failed,
     mark_task_running,
-    run_in_thread,
     sanitize_error,
     upsert_blog,
     upsert_highlights,

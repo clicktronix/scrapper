@@ -12,10 +12,10 @@ import sys
 from typing import Any, cast
 
 from loguru import logger
-from supabase import create_client
+from supabase import create_async_client
 
 from src.config import load_settings
-from src.database import create_task_if_not_exists, run_in_thread
+from src.database import create_task_if_not_exists
 
 
 def _as_rows(data: Any) -> list[dict[str, Any]]:
@@ -32,7 +32,7 @@ def _as_rows(data: Any) -> list[dict[str, Any]]:
 async def reanalyze(limit: int | None = None, dry_run: bool = False) -> None:
     """Сбросить ai_insights и создать задачи переанализа."""
     settings = load_settings()
-    db = create_client(settings.supabase_url, settings.supabase_service_key.get_secret_value())
+    db = await create_async_client(settings.supabase_url, settings.supabase_service_key.get_secret_value())
 
     # Выбираем блогеров с завершённым AI-анализом
     query = (
@@ -45,7 +45,7 @@ async def reanalyze(limit: int | None = None, dry_run: bool = False) -> None:
     if limit:
         query = query.limit(limit)
 
-    result = await run_in_thread(query.execute)
+    result = await query.execute()
     blogs = _as_rows(result.data)
 
     if not blogs:
@@ -66,7 +66,7 @@ async def reanalyze(limit: int | None = None, dry_run: bool = False) -> None:
     batch_size = 50
     for i in range(0, len(blog_ids), batch_size):
         batch = blog_ids[i:i + batch_size]
-        await run_in_thread(
+        await (
             db.table("blogs")
             .update({
                 "ai_insights": None,
@@ -76,7 +76,7 @@ async def reanalyze(limit: int | None = None, dry_run: bool = False) -> None:
                 "scrape_status": "active",
             })
             .in_("id", batch)
-            .execute
+            .execute()
         )
         logger.info(f"Сброшено {min(i + batch_size, len(blog_ids))}/{len(blog_ids)} блогеров")
 

@@ -2,7 +2,7 @@
 
 from typing import Any, cast
 
-from supabase import Client
+from supabase import AsyncClient
 
 import src.worker.handlers as _h
 from src.config import Settings
@@ -20,7 +20,7 @@ def _as_row_dict(value: Any) -> dict[str, Any]:
 
 
 async def handle_discover(
-    db: Client,
+    db: AsyncClient,
     task: TaskRecord,
     scraper: BaseScraper,
     settings: Settings,
@@ -65,13 +65,9 @@ async def handle_discover(
     normalized_usernames = list(
         dict.fromkeys(_normalize_username(profile.username) for profile in discovered)
     )
-    existing_blogs_result = await _h.run_in_thread(
-        db.table("blogs")
-        .select("id, username, scraped_at")
-        .eq("platform", "instagram")
-        .in_("username", normalized_usernames)
-        .execute
-    )
+    existing_blogs_result = await db.table("blogs").select(
+        "id, username, scraped_at"
+    ).eq("platform", "instagram").in_("username", normalized_usernames).execute()
     existing_blogs_by_username: dict[str, dict[str, Any]] = {}
     for raw in existing_blogs_result.data or []:
         row = _as_row_dict(raw)
@@ -101,13 +97,9 @@ async def handle_discover(
         # Создаём person + blog (ошибка одного профиля не ломает весь discover)
         person_id: str | None = None
         try:
-            person_result = await _h.run_in_thread(
-                db.table("persons")
-                .insert({
-                    "full_name": profile.full_name or normalized_username,
-                })
-                .execute
-            )
+            person_result = await db.table("persons").insert({
+                "full_name": profile.full_name or normalized_username,
+            }).execute()
             person_row = _as_row_dict(person_result.data[0]) if person_result.data else {}
             person_id_raw = person_row.get("id")
             if not isinstance(person_id_raw, str):
@@ -129,11 +121,7 @@ async def handle_discover(
             if profile.account_type is not None:
                 blog_insert_data["account_type"] = profile.account_type
 
-            blog_result = await _h.run_in_thread(
-                db.table("blogs")
-                .insert(blog_insert_data)
-                .execute
-            )
+            blog_result = await db.table("blogs").insert(blog_insert_data).execute()
             blog_row = _as_row_dict(blog_result.data[0]) if blog_result.data else {}
             blog_id_raw = blog_row.get("id")
             if not isinstance(blog_id_raw, str):

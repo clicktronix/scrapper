@@ -7,7 +7,7 @@ import openai
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
 from openai import AsyncOpenAI
-from supabase import Client
+from supabase import AsyncClient
 
 from src.ai.embedding import build_embedding_text, generate_embedding
 from src.ai.schemas import AIInsights
@@ -24,7 +24,6 @@ from src.database import (
     create_task_if_not_exists,
     mark_task_failed,
     recover_stuck_tasks,
-    run_in_thread,
 )
 from src.image_storage import delete_blog_images
 from src.worker.handlers import handle_batch_results
@@ -54,20 +53,16 @@ def _as_rows(data: Any) -> list[dict[str, Any]]:
     return rows
 
 
-async def schedule_updates(db: Client, settings: Settings) -> None:
+async def schedule_updates(db: AsyncClient, settings: Settings) -> None:
     """Создать задачи re-scrape для блогов, где scraped_at > rescrape_days дней."""
     record_job_run("schedule_updates")
     threshold = (datetime.now(UTC) - timedelta(days=settings.rescrape_days)).isoformat()
 
-    result = await run_in_thread(
-        db.table("blogs")
-        .select("id")
-        .in_("scrape_status", ["active", "ai_analyzed"])
-        .or_(f"scraped_at.is.null,scraped_at.lt.{threshold}")
-        .order("followers_count", desc=True)
-        .limit(100)
-        .execute
-    )
+    result = await db.table("blogs").select("id").in_(
+        "scrape_status", ["active", "ai_analyzed"]
+    ).or_(f"scraped_at.is.null,scraped_at.lt.{threshold}").order(
+        "followers_count", desc=True
+    ).limit(100).execute()
 
     created = 0
     for blog in _as_rows(result.data):
@@ -86,17 +81,13 @@ async def schedule_updates(db: Client, settings: Settings) -> None:
     logger.info(f"Scheduled {created} blog re-scrape tasks")
 
 
-async def poll_batches(db: Client, openai_client: AsyncOpenAI) -> None:
+async def poll_batches(db: AsyncClient, openai_client: AsyncOpenAI) -> None:
     """Проверить статус running ai_analysis батчей."""
     record_job_run("poll_batches")
     logger.debug("[poll_batches] Checking running ai_analysis tasks...")
-    result = await run_in_thread(
-        db.table("scrape_tasks")
-        .select("id, blog_id, payload, attempts, max_attempts")
-        .eq("task_type", "ai_analysis")
-        .eq("status", "running")
-        .execute
-    )
+    result = await db.table("scrape_tasks").select(
+        "id, blog_id, payload, attempts, max_attempts"
+    ).eq("task_type", "ai_analysis").eq("status", "running").execute()
 
     if not result.data:
         logger.debug("[poll_batches] No running ai_analysis tasks")
@@ -147,12 +138,10 @@ async def poll_batches(db: Client, openai_client: AsyncOpenAI) -> None:
         # застрянут в running, т.к. poll_batches не может найти их батч.
         for orphan_id in orphaned_task_ids:
             try:
-                await run_in_thread(
-                    db.table("scrape_tasks").update({
-                        "status": "pending",
-                        "error_message": "Reset: lost batch_id, no way to poll results",
-                    }).eq("id", orphan_id).execute
-                )
+                await db.table("scrape_tasks").update({
+                    "status": "pending",
+                    "error_message": "Reset: lost batch_id, no way to poll results",
+                }).eq("id", orphan_id).execute()
             except Exception as e:
                 logger.error(f"[poll_batches] Не удалось сбросить orphaned задачу {orphan_id}: {e}")
 
@@ -169,7 +158,7 @@ async def poll_batches(db: Client, openai_client: AsyncOpenAI) -> None:
             gc.collect()
 
 
-async def retry_stale_batches(db: Client, openai_client: AsyncOpenAI, settings: Settings) -> None:
+async def retry_stale_batches(db: AsyncClient, openai_client: AsyncOpenAI, settings: Settings) -> None:
     """Пересобрать батчи, которые не завершились за 25 часов (последняя линия обороны).
 
     OpenAI Batch API гарантирует выполнение в пределах 24ч.
@@ -179,14 +168,11 @@ async def retry_stale_batches(db: Client, openai_client: AsyncOpenAI, settings: 
     logger.debug("[retry_stale_batches] Проверяем зависшие батчи...")
     threshold = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
 
-    result = await run_in_thread(
-        db.table("scrape_tasks")
-        .select("id, blog_id, payload, attempts, max_attempts")
-        .eq("task_type", "ai_analysis")
-        .eq("status", "running")
-        .lt("started_at", threshold)
-        .execute
-    )
+    result = await db.table("scrape_tasks").select(
+        "id, blog_id, payload, attempts, max_attempts"
+    ).eq("task_type", "ai_analysis").eq("status", "running").lt(
+        "started_at", threshold
+    ).execute()
 
     if not result.data:
         return
@@ -212,19 +198,14 @@ async def retry_stale_batches(db: Client, openai_client: AsyncOpenAI, settings: 
         logger.warning(f"Retried {retried} stale AI batch tasks")
 
 
-async def cleanup_old_images(db: Client, settings: Settings) -> None:
+async def cleanup_old_images(db: AsyncClient, settings: Settings) -> None:
     """Удалить изображения блогов с scraped_at > rescrape_days дней назад."""
     record_job_run("cleanup_old_images")
     threshold = (datetime.now(UTC) - timedelta(days=settings.rescrape_days)).isoformat()
 
-    result = await run_in_thread(
-        db.table("blogs")
-        .select("id")
-        .lt("scraped_at", threshold)
-        .not_.in_("scrape_status", ["scraping", "pending"])
-        .limit(100)
-        .execute
-    )
+    result = await db.table("blogs").select("id").lt(
+        "scraped_at", threshold
+    ).not_.in_("scrape_status", ["scraping", "pending"]).limit(100).execute()
 
     if not result.data:
         logger.debug("[cleanup_images] Нет старых блогов для очистки")
@@ -242,19 +223,13 @@ async def cleanup_old_images(db: Client, settings: Settings) -> None:
 
 
 async def retry_missing_embeddings(
-    db: Client, openai_client: AsyncOpenAI
+    db: AsyncClient, openai_client: AsyncOpenAI
 ) -> None:
     """Перегенерировать embedding для блогов с insights но без вектора."""
     record_job_run("retry_missing_embeddings")
-    result = await run_in_thread(
-        db.table("blogs")
-        .select("id, ai_insights")
-        .not_.is_("ai_insights", "null")
-        .is_("embedding", "null")
-        .neq("scrape_status", "ai_refused")
-        .limit(50)
-        .execute
-    )
+    result = await db.table("blogs").select("id, ai_insights").not_.is_(
+        "ai_insights", "null"
+    ).is_("embedding", "null").neq("scrape_status", "ai_refused").limit(50).execute()
     if not result.data:
         return
 
@@ -273,9 +248,7 @@ async def retry_missing_embeddings(
                 continue
             vector = await generate_embedding(openai_client, text)
             if vector:
-                await run_in_thread(
-                    db.table("blogs").update({"embedding": vector}).eq("id", blog_id).execute
-                )
+                await db.table("blogs").update({"embedding": vector}).eq("id", blog_id).execute()
                 regenerated += 1
             else:
                 failed += 1
@@ -293,26 +266,21 @@ async def retry_missing_embeddings(
         )
 
 
-async def retry_taxonomy_mappings(db: Client) -> None:
+async def retry_taxonomy_mappings(db: AsyncClient) -> None:
     """Повторить матчинг категорий/тегов по уже сохранённым ai_insights."""
     record_job_run("retry_taxonomy_mappings")
-    result = await run_in_thread(
-        db.table("blogs")
-        .select("id, ai_insights")
-        .not_.is_("ai_insights", "null")
-        .eq("scrape_status", "ai_analyzed")
-        .limit(50)
-        .execute
-    )
+    result = await db.table("blogs").select("id, ai_insights").not_.is_(
+        "ai_insights", "null"
+    ).eq("scrape_status", "ai_analyzed").limit(50).execute()
     if not result.data:
         return
 
     # Исключаем блоги, у которых уже есть записи в blog_categories
     rows = _as_rows(result.data)
     blog_ids = [str(b.get("id", "")) for b in rows if str(b.get("id", ""))]
-    existing_cats = await run_in_thread(
-        db.table("blog_categories").select("blog_id").in_("blog_id", blog_ids).execute
-    )
+    existing_cats = await db.table("blog_categories").select("blog_id").in_(
+        "blog_id", blog_ids
+    ).execute()
     already_matched = {
         str(r.get("blog_id", ""))
         for r in _as_rows(existing_cats.data)
@@ -343,7 +311,7 @@ async def retry_taxonomy_mappings(db: Client) -> None:
     logger.info(f"[retry_taxonomy] Processed={processed}, errors={errors}")
 
 
-async def audit_taxonomy_drift(db: Client) -> None:
+async def audit_taxonomy_drift(db: AsyncClient) -> None:
     """Проверить расхождения taxonomy из prompt и справочников БД."""
     record_job_run("audit_taxonomy_drift")
     categories_cache = await load_categories(db)
@@ -381,7 +349,7 @@ async def audit_taxonomy_drift(db: Client) -> None:
         logger.info("[taxonomy_audit] Prompt taxonomy fully aligned with DB")
 
 
-async def recover_tasks(db: Client) -> None:
+async def recover_tasks(db: AsyncClient) -> None:
     """Вернуть зависшие running задачи в pending (full_scrape, discover)."""
     record_job_run("recover_tasks")
     try:
@@ -391,7 +359,7 @@ async def recover_tasks(db: Client) -> None:
 
 
 def create_scheduler(
-    db: Client,
+    db: AsyncClient,
     settings: Settings,
     openai_client: AsyncOpenAI | None = None,
 ) -> AsyncIOScheduler:

@@ -6,7 +6,7 @@ from typing import Any, cast
 
 from instagrapi.exceptions import UserNotFound
 from loguru import logger
-from supabase import Client
+from supabase import AsyncClient
 
 import src.worker.handlers as _h
 from src.config import Settings
@@ -35,7 +35,7 @@ def _extract_inserted_id(data: Any) -> str | None:
 
 
 async def _mark_filtered_out(
-    db: Client,
+    db: AsyncClient,
     task_id: str,
     reason: str,
     *,
@@ -48,18 +48,13 @@ async def _mark_filtered_out(
     clips_count: int | None = None,
 ) -> None:
     """Пометить задачу как done и записать в pre_filter_log."""
-    await _h.run_in_thread(
-        db.table("scrape_tasks")
-        .update(
-            {
-                "status": "done",
-                "completed_at": datetime.now(UTC).isoformat(),
-                "error_message": f"filtered_out: {reason}",
-            }
-        )
-        .eq("id", task_id)
-        .execute
-    )
+    await db.table("scrape_tasks").update(
+        {
+            "status": "done",
+            "completed_at": datetime.now(UTC).isoformat(),
+            "error_message": f"filtered_out: {reason}",
+        }
+    ).eq("id", task_id).execute()
     log_row: dict[str, Any] = {
         "username": username,
         "reason": reason,
@@ -78,11 +73,9 @@ async def _mark_filtered_out(
     if clips_count is not None:
         log_row["clips_count"] = clips_count
     try:
-        await _h.run_in_thread(
-            db.table("pre_filter_log")
-            .upsert(log_row, on_conflict="username,reason")
-            .execute
-        )
+        await db.table("pre_filter_log").upsert(
+            log_row, on_conflict="username,reason"
+        ).execute()
     except Exception as e:
         logger.warning(f"[pre_filter] Не удалось записать лог для @{username}: {e}")
 
@@ -108,7 +101,7 @@ def _parse_taken_at(value: Any) -> datetime | None:
 
 
 async def handle_pre_filter(
-    db: Client,
+    db: AsyncClient,
     task: TaskRecord,
     scraper: Any,
     settings: Settings,
@@ -134,13 +127,9 @@ async def handle_pre_filter(
     username = _normalize_username(username)
 
     # Проверяем, нет ли уже блога — чтобы не тратить HikerAPI запросы зря
-    existing_blog = await _h.run_in_thread(
-        db.table("blogs")
-        .select("id")
-        .eq("platform", "instagram")
-        .eq("username", username)
-        .execute
-    )
+    existing_blog = await db.table("blogs").select("id").eq(
+        "platform", "instagram"
+    ).eq("username", username).execute()
     if existing_blog.data:
         logger.info(f"[pre_filter] @{username}: блог уже существует, пропускаем")
         await _h.mark_task_done(db, task_id)
@@ -352,7 +341,7 @@ async def handle_pre_filter(
     try:
         full_name = user.get("full_name") or username
 
-        person_result = await _h.run_in_thread(db.table("persons").insert({"full_name": full_name}).execute)
+        person_result = await db.table("persons").insert({"full_name": full_name}).execute()
         person_id = _extract_inserted_id(person_result.data)
         if person_id is None:
             raise ValueError("Invalid persons insert response: missing id")
@@ -361,7 +350,7 @@ async def handle_pre_filter(
             user, person_id=person_id, username=username,
         )
 
-        blog_result = await _h.run_in_thread(db.table("blogs").insert(blog_insert_data).execute)
+        blog_result = await db.table("blogs").insert(blog_insert_data).execute()
         blog_id = _extract_inserted_id(blog_result.data)
         if blog_id is None:
             raise ValueError("Invalid blogs insert response: missing id")

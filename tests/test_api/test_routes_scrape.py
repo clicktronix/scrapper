@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from tests.test_api.conftest import AUTH_HEADERS, make_app
+from tests.test_api.conftest import AUTH_HEADERS, make_app, make_db_mock
 
 
 class TestScrapeEndpoint:
@@ -195,18 +195,13 @@ class TestScrapeEndpoint:
 
     def test_deleted_blog_skipped(self) -> None:
         """Блог со статусом 'deleted' → skipped с причиной."""
-        app = make_app()
+        db = make_db_mock()
+        builder = db.table.return_value
+        builder.execute.return_value = MagicMock(data=[{"scrape_status": "deleted"}])
+        app = make_app(db=db)
 
-        # Мок run_in_thread для проверки статуса блога
-        status_result = MagicMock()
-        status_result.data = [{"scrape_status": "deleted"}]
-
-        with (
-            patch("src.api.app.find_or_create_blog", new_callable=AsyncMock) as mock_find,
-            patch("src.api.app.run_in_thread", new_callable=AsyncMock) as mock_rt,
-        ):
+        with patch("src.api.app.find_or_create_blog", new_callable=AsyncMock) as mock_find:
             mock_find.return_value = "blog-1"
-            mock_rt.return_value = status_result
             client = TestClient(app)
             resp = client.post(
                 "/api/tasks/scrape",
@@ -223,17 +218,13 @@ class TestScrapeEndpoint:
 
     def test_deactivated_blog_skipped(self) -> None:
         """Блог со статусом 'deactivated' → skipped с причиной."""
-        app = make_app()
+        db = make_db_mock()
+        builder = db.table.return_value
+        builder.execute.return_value = MagicMock(data=[{"scrape_status": "deactivated"}])
+        app = make_app(db=db)
 
-        status_result = MagicMock()
-        status_result.data = [{"scrape_status": "deactivated"}]
-
-        with (
-            patch("src.api.app.find_or_create_blog", new_callable=AsyncMock) as mock_find,
-            patch("src.api.app.run_in_thread", new_callable=AsyncMock) as mock_rt,
-        ):
+        with patch("src.api.app.find_or_create_blog", new_callable=AsyncMock) as mock_find:
             mock_find.return_value = "blog-1"
-            mock_rt.return_value = status_result
             client = TestClient(app)
             resp = client.post(
                 "/api/tasks/scrape",

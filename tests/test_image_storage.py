@@ -170,40 +170,43 @@ class TestUploadImage:
         from src.image_storage import upload_image
 
         mock_db = MagicMock()
+        mock_storage_bucket = MagicMock()
+        mock_db.storage.from_.return_value = mock_storage_bucket
+        mock_storage_bucket.upload = AsyncMock()
 
-        with patch("src.image_storage.run_in_thread", new_callable=AsyncMock) as mock_run:
-            result = await upload_image(mock_db, "blog-1/avatar.jpg", b"image-data", "image/jpeg")
-            assert result is True
-            mock_run.assert_called_once()
+        result = await upload_image(mock_db, "blog-1/avatar.jpg", b"image-data", "image/jpeg")
+        assert result is True
+        mock_storage_bucket.upload.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_failure(self) -> None:
         from src.image_storage import upload_image
 
         mock_db = MagicMock()
+        mock_storage_bucket = MagicMock()
+        mock_db.storage.from_.return_value = mock_storage_bucket
+        mock_storage_bucket.upload = AsyncMock(side_effect=Exception("Storage error"))
 
-        with patch("src.image_storage.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.side_effect = Exception("Storage error")
-            result = await upload_image(mock_db, "blog-1/avatar.jpg", b"image-data", "image/jpeg")
-            assert result is False
+        result = await upload_image(mock_db, "blog-1/avatar.jpg", b"image-data", "image/jpeg")
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_correct_bucket_and_path(self) -> None:
         from src.image_storage import upload_image
 
         mock_db = MagicMock()
-        mock_storage = MagicMock()
-        mock_db.storage.from_.return_value = mock_storage
+        mock_storage_bucket = MagicMock()
+        mock_db.storage.from_.return_value = mock_storage_bucket
+        mock_storage_bucket.upload = AsyncMock()
 
-        with patch("src.image_storage.run_in_thread", new_callable=AsyncMock) as mock_run:
-            await upload_image(mock_db, "blog-1/post_p1.jpg", b"data", "image/jpeg")
+        await upload_image(mock_db, "blog-1/post_p1.jpg", b"data", "image/jpeg")
 
-            # Проверяем аргументы run_in_thread: первый — callable upload
-            call_args = mock_run.call_args
-            # run_in_thread(db.storage.from_(BUCKET).upload, path, data, opts)
-            assert call_args.args[1] == "blog-1/post_p1.jpg"
-            assert call_args.args[2] == b"data"
-            assert call_args.args[3] == {"content-type": "image/jpeg", "upsert": "true"}
+        mock_db.storage.from_.assert_called_with("blog-images")
+        mock_storage_bucket.upload.assert_called_once_with(
+            "blog-1/post_p1.jpg",
+            b"data",
+            {"content-type": "image/jpeg", "upsert": "true"},
+        )
 
 
 class TestEagainDetection:
@@ -381,71 +384,85 @@ class TestDeleteBlogImages:
         from src.image_storage import delete_blog_images
 
         mock_db = MagicMock()
+        mock_storage_bucket = MagicMock()
+        mock_db.storage.from_.return_value = mock_storage_bucket
         # avatar.jpg пропускается — удаляется только post_p1.jpg
         files = [{"name": "avatar.jpg"}, {"name": "post_p1.jpg"}]
+        mock_storage_bucket.list = AsyncMock(return_value=files)
+        mock_storage_bucket.remove = AsyncMock()
 
-        with patch("src.image_storage.run_in_thread", new_callable=AsyncMock) as mock_run:
-            # list → files, remove → OK, update thumbnail_url → OK
-            mock_run.side_effect = [files, None, MagicMock()]
+        # Мок для db.table("blog_posts").update(...).eq(...).execute()
+        table_mock = MagicMock()
+        mock_db.table.return_value = table_mock
+        table_mock.update.return_value = table_mock
+        table_mock.eq.return_value = table_mock
+        table_mock.execute = AsyncMock()
 
-            result = await delete_blog_images(mock_db, "blog-1")
-            assert result == 1  # только post, без avatar
-            assert mock_run.call_count == 3  # list + remove + update thumbnail_url
+        result = await delete_blog_images(mock_db, "blog-1")
+        assert result == 1  # только post, без avatar
+        mock_storage_bucket.remove.assert_called_once()
+        table_mock.execute.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_empty_folder(self) -> None:
         from src.image_storage import delete_blog_images
 
         mock_db = MagicMock()
+        mock_storage_bucket = MagicMock()
+        mock_db.storage.from_.return_value = mock_storage_bucket
+        mock_storage_bucket.list = AsyncMock(return_value=[])
 
-        with patch("src.image_storage.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = []
-
-            result = await delete_blog_images(mock_db, "blog-1")
-            assert result == 0
-            # Только вызов list, remove не должен вызываться
-            mock_run.assert_called_once()
+        result = await delete_blog_images(mock_db, "blog-1")
+        assert result == 0
+        mock_storage_bucket.list.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_list_error(self) -> None:
         from src.image_storage import delete_blog_images
 
         mock_db = MagicMock()
+        mock_storage_bucket = MagicMock()
+        mock_db.storage.from_.return_value = mock_storage_bucket
+        mock_storage_bucket.list = AsyncMock(side_effect=Exception("Storage error"))
 
-        with patch("src.image_storage.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.side_effect = Exception("Storage error")
-
-            result = await delete_blog_images(mock_db, "blog-1")
-            assert result == 0
+        result = await delete_blog_images(mock_db, "blog-1")
+        assert result == 0
 
     @pytest.mark.asyncio
     async def test_remove_error(self) -> None:
         from src.image_storage import delete_blog_images
 
         mock_db = MagicMock()
+        mock_storage_bucket = MagicMock()
+        mock_db.storage.from_.return_value = mock_storage_bucket
         files = [{"name": "avatar.jpg"}]
+        mock_storage_bucket.list = AsyncMock(return_value=files)
 
-        with patch("src.image_storage.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.side_effect = [files, Exception("Remove error")]
-
-            result = await delete_blog_images(mock_db, "blog-1")
-            assert result == 0
+        result = await delete_blog_images(mock_db, "blog-1")
+        assert result == 0
 
     @pytest.mark.asyncio
     async def test_skips_unsafe_file_names(self) -> None:
         from src.image_storage import delete_blog_images
 
         mock_db = MagicMock()
+        mock_storage_bucket = MagicMock()
+        mock_db.storage.from_.return_value = mock_storage_bucket
         files = [
             {"name": "avatar.jpg"},
             {"name": "../outside.jpg"},
             {"name": "safe_post.jpg"},
         ]
+        mock_storage_bucket.list = AsyncMock(return_value=files)
+        mock_storage_bucket.remove = AsyncMock()
 
-        with patch("src.image_storage.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.side_effect = [files, None, MagicMock()]
-            result = await delete_blog_images(mock_db, "blog-1")
+        table_mock = MagicMock()
+        mock_db.table.return_value = table_mock
+        table_mock.update.return_value = table_mock
+        table_mock.eq.return_value = table_mock
+        table_mock.execute = AsyncMock()
 
+        result = await delete_blog_images(mock_db, "blog-1")
         assert result == 1
 
     @pytest.mark.asyncio
@@ -453,7 +470,10 @@ class TestDeleteBlogImages:
         from src.image_storage import delete_blog_images
 
         mock_db = MagicMock()
-        with patch("src.image_storage.run_in_thread", new_callable=AsyncMock) as mock_run:
-            result = await delete_blog_images(mock_db, "../evil")
+        mock_storage_bucket = MagicMock()
+        mock_db.storage.from_.return_value = mock_storage_bucket
+        mock_storage_bucket.list = AsyncMock()
+
+        result = await delete_blog_images(mock_db, "../evil")
         assert result == 0
-        mock_run.assert_not_called()
+        mock_storage_bucket.list.assert_not_called()

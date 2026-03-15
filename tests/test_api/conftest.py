@@ -1,6 +1,35 @@
 """Общие фикстуры и хелперы для тестов API."""
 import time
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
+
+
+def _make_query_builder():
+    """Создать мок query-builder'а Supabase.
+
+    Все chainable-методы возвращают self, .execute() — AsyncMock.
+    """
+    builder = MagicMock(name="query_builder")
+    builder.execute = AsyncMock(name="execute")
+    # Chainable-методы возвращают builder
+    for method in (
+        "select", "eq", "neq", "gt", "lt", "gte", "lte",
+        "insert", "update", "upsert", "delete",
+        "order", "range", "limit", "in_",
+    ):
+        getattr(builder, method).return_value = builder
+    return builder
+
+
+def make_db_mock():
+    """Создать мок AsyncClient с query-builder цепочкой.
+
+    db.table(...) и db.rpc(...) возвращают отдельные query-builder'ы,
+    чей .execute() — AsyncMock.
+    """
+    db = MagicMock(name="AsyncClient")
+    db.table.return_value = _make_query_builder()
+    db.rpc.return_value = _make_query_builder()
+    return db
 
 
 def make_settings():
@@ -30,12 +59,12 @@ def make_pool(total: int = 2, available: int = 1):
     return pool
 
 
-def make_app(pool=None, settings=None):
+def make_app(pool=None, settings=None, db=None):
     """Создать FastAPI app с моками."""
     from src.api.app import create_app
 
     return create_app(
-        db=MagicMock(),
+        db=db or make_db_mock(),
         pool=pool or make_pool(),
         settings=settings or make_settings(),
     )

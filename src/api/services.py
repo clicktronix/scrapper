@@ -10,10 +10,10 @@ from fastapi import Response
 from loguru import logger
 from postgrest.exceptions import APIError as PostgrestAPIError
 from postgrest.types import CountMethod
-from supabase import Client
+from supabase import AsyncClient
 
 from src.api.schemas import HealthResponse, QueueDepthItem
-from src.database import cleanup_orphan_person, run_in_thread
+from src.database import cleanup_orphan_person
 from src.models.db_types import TaskListResultWithError, TaskType
 from src.platforms.instagram.client import AccountPool
 from src.worker.scheduler import get_last_run_times
@@ -34,14 +34,14 @@ def _is_unique_violation(error: PostgrestAPIError) -> bool:
     return False
 
 
-async def find_blog_by_username(db: Client, username: str) -> str | None:
+async def find_blog_by_username(db: AsyncClient, username: str) -> str | None:
     """Найти блог по нормализованному username. Возвращает blog_id или None."""
-    blog_result = await run_in_thread(
+    blog_result = await (
         db.table("blogs")
         .select("id")
         .eq("platform", "instagram")
         .eq("username", username)
-        .execute
+        .execute()
     )
     if blog_result.data:
         first_row = cast(dict[str, Any], blog_result.data[0]) if isinstance(blog_result.data[0], dict) else {}
@@ -51,7 +51,7 @@ async def find_blog_by_username(db: Client, username: str) -> str | None:
     return None
 
 
-async def find_or_create_blog(db: Client, username: str) -> str:
+async def find_or_create_blog(db: AsyncClient, username: str) -> str:
     """Найти существующий блог или создать person + blog. Защита от race condition."""
     normalized_username = username.strip().lstrip("@").lower()
 
@@ -61,10 +61,10 @@ async def find_or_create_blog(db: Client, username: str) -> str:
         return existing_id
 
     # Создать person + blog
-    person_result = await run_in_thread(
+    person_result = await (
         db.table("persons")
         .insert({"full_name": normalized_username})
-        .execute
+        .execute()
     )
     first_person = (
         cast(dict[str, Any], person_result.data[0])
@@ -76,7 +76,7 @@ async def find_or_create_blog(db: Client, username: str) -> str:
     person_id = person_id_value
 
     try:
-        blog_result = await run_in_thread(
+        blog_result = await (
             db.table("blogs")
             .insert({
                 "person_id": person_id,
@@ -84,7 +84,7 @@ async def find_or_create_blog(db: Client, username: str) -> str:
                 "username": normalized_username,
                 "scrape_status": "pending",
             })
-            .execute
+            .execute()
         )
         first_blog = (
             cast(dict[str, Any], blog_result.data[0])
@@ -109,7 +109,7 @@ async def find_or_create_blog(db: Client, username: str) -> str:
 
 
 async def get_health_status(
-    db: Client, pool: AccountPool | None, response: Response,
+    db: AsyncClient, pool: AccountPool | None, response: Response,
 ) -> HealthResponse:
     """Собрать данные о состоянии сервиса: аккаунты, задачи."""
     # При HikerAPI бэкенде AccountPool отсутствует
@@ -131,18 +131,14 @@ async def get_health_status(
     # Подсчёт задач из БД — параллельно
     try:
         running, pending = await asyncio.gather(
-            run_in_thread(
-                db.table("scrape_tasks")
-                .select("id", count=CountMethod.exact)
-                .eq("status", "running")
-                .execute
-            ),
-            run_in_thread(
-                db.table("scrape_tasks")
-                .select("id", count=CountMethod.exact)
-                .eq("status", "pending")
-                .execute
-            ),
+            db.table("scrape_tasks")
+            .select("id", count=CountMethod.exact)
+            .eq("status", "running")
+            .execute(),
+            db.table("scrape_tasks")
+            .select("id", count=CountMethod.exact)
+            .eq("status", "pending")
+            .execute(),
         )
         tasks_running = running.count or 0
         tasks_pending = pending.count or 0
@@ -216,13 +212,11 @@ def get_scheduler_status(scheduler: AsyncIOScheduler) -> list[dict[str, Any]]:
     return jobs
 
 
-async def _get_queue_depth(db: Client) -> dict[str, QueueDepthItem] | None:
+async def _get_queue_depth(db: AsyncClient) -> dict[str, QueueDepthItem] | None:
     """Получить глубину очереди по task_type. Graceful degradation при ошибках."""
     try:
         # Пробуем RPC (быстрее — один запрос)
-        rpc_result = await run_in_thread(
-            db.rpc("get_queue_depth", {}).execute
-        )
+        rpc_result = await db.rpc("get_queue_depth", {}).execute()
         rpc_rows = rpc_result.data
         if isinstance(rpc_rows, list) and rpc_rows:
             depth: dict[str, QueueDepthItem] = {}
@@ -251,22 +245,18 @@ async def _get_queue_depth(db: Client) -> dict[str, QueueDepthItem] | None:
         coros: list[Coroutine[Any, Any, APIResponse[Any]]] = []
         for tt in task_types:
             coros.append(
-                run_in_thread(
-                    db.table("scrape_tasks")
-                    .select("id", count=CountMethod.exact)
-                    .eq("task_type", tt)
-                    .eq("status", "pending")
-                    .execute
-                )
+                db.table("scrape_tasks")
+                .select("id", count=CountMethod.exact)
+                .eq("task_type", tt)
+                .eq("status", "pending")
+                .execute()
             )
             coros.append(
-                run_in_thread(
-                    db.table("scrape_tasks")
-                    .select("id", count=CountMethod.exact)
-                    .eq("task_type", tt)
-                    .eq("status", "running")
-                    .execute
-                )
+                db.table("scrape_tasks")
+                .select("id", count=CountMethod.exact)
+                .eq("task_type", tt)
+                .eq("status", "running")
+                .execute()
             )
 
         gather_results: list[APIResponse[Any] | BaseException] = await asyncio.gather(
@@ -286,7 +276,7 @@ async def _get_queue_depth(db: Client) -> dict[str, QueueDepthItem] | None:
 
 
 async def fetch_tasks_list(
-    db: Client,
+    db: AsyncClient,
     status: str | None = None,
     task_type: str | None = None,
     limit: int = 20,
@@ -300,7 +290,7 @@ async def fetch_tasks_list(
         if task_type:
             query = query.eq("task_type", task_type)
         query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
-        result = await run_in_thread(query.execute)
+        result = await query.execute()
         rows: list[dict[str, Any]] = []
         for raw in result.data or []:
             if isinstance(raw, dict):

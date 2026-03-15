@@ -29,7 +29,7 @@ class TestHandleFullScrape:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         # blog select — возвращает username
         blog_select_mock = MagicMock()
@@ -37,11 +37,11 @@ class TestHandleFullScrape:
 
         # Настраиваем цепочки Supabase mock
         table_mock = MagicMock()
-        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
-        table_mock.upsert.return_value.execute.return_value = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute = AsyncMock(return_value=blog_select_mock)
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
+        table_mock.upsert.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         # Мок скрапера
         mock_scraper = AsyncMock()
@@ -57,16 +57,16 @@ class TestHandleFullScrape:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         blog_select_mock = MagicMock()
         blog_select_mock.data = [{"username": "privateblogger"}]
 
         table_mock = MagicMock()
-        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute = AsyncMock(return_value=blog_select_mock)
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         mock_scraper = AsyncMock()
         mock_scraper.scrape_profile.side_effect = PrivateAccountError("private")
@@ -87,16 +87,16 @@ class TestHandleFullScrape:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         blog_select_mock = MagicMock()
         blog_select_mock.data = [{"username": "testblogger"}]
 
         table_mock = MagicMock()
-        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute = AsyncMock(return_value=blog_select_mock)
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         mock_scraper = AsyncMock()
         mock_scraper.scrape_profile.side_effect = AllAccountsCooldownError("cooldown")
@@ -119,16 +119,16 @@ class TestHandleFullScrape:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         blog_select_mock = MagicMock()
         blog_select_mock.data = [{"username": "deleteduser"}]
 
         table_mock = MagicMock()
-        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute = AsyncMock(return_value=blog_select_mock)
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         mock_scraper = AsyncMock()
         mock_scraper.scrape_profile.side_effect = UserNotFound()
@@ -149,16 +149,16 @@ class TestHandleFullScrape:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         # Блог не найден
         empty_result = MagicMock()
         empty_result.data = []
         table_mock = MagicMock()
-        table_mock.select.return_value.eq.return_value.execute.return_value = empty_result
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute = AsyncMock(return_value=empty_result)
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         mock_scraper = AsyncMock()
 
@@ -173,16 +173,16 @@ class TestHandleFullScrape:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         blog_select_mock = MagicMock()
         blog_select_mock.data = [{"username": "testblogger"}]
 
         table_mock = MagicMock()
-        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute = AsyncMock(return_value=blog_select_mock)
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         mock_scraper = AsyncMock()
         mock_scraper.scrape_profile.side_effect = RuntimeError("Connection reset")
@@ -205,16 +205,16 @@ class TestHandleFullScrape:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         blog_select_mock = MagicMock()
         blog_select_mock.data = [{"username": "gone_blogger"}]
 
         table_mock = MagicMock()
-        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute = AsyncMock(return_value=blog_select_mock)
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         mock_scraper = AsyncMock()
         mock_scraper.scrape_profile.side_effect = HikerAPIError(404, "Not Found")
@@ -235,16 +235,16 @@ class TestHandleFullScrape:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         blog_select_mock = MagicMock()
         blog_select_mock.data = [{"username": "rate_limited_blogger"}]
 
         table_mock = MagicMock()
-        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute = AsyncMock(return_value=blog_select_mock)
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         mock_scraper = AsyncMock()
         mock_scraper.scrape_profile.side_effect = HikerAPIError(429, "Rate limited")
@@ -265,16 +265,16 @@ class TestHandleFullScrape:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         blog_select_mock = MagicMock()
         blog_select_mock.data = [{"username": "gone_user", "scrape_status": "deleted"}]
 
         table_mock = MagicMock()
-        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute = AsyncMock(return_value=blog_select_mock)
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         mock_scraper = AsyncMock()
 
@@ -289,7 +289,7 @@ class TestHandleFullScrape:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         blog_select_mock = MagicMock()
         blog_select_mock.data = [
@@ -297,10 +297,10 @@ class TestHandleFullScrape:
         ]
 
         table_mock = MagicMock()
-        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute = AsyncMock(return_value=blog_select_mock)
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         mock_scraper = AsyncMock()
 
@@ -315,7 +315,7 @@ class TestHandleFullScrape:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         # mark_task_running возвращает False (не заклеймлено)
         with patch(
@@ -336,17 +336,17 @@ class TestHandleFullScrape:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         blog_select_mock = MagicMock()
         blog_select_mock.data = [{"username": "testblogger"}]
 
         table_mock = MagicMock()
-        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
-        table_mock.upsert.return_value.execute.return_value = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute = AsyncMock(return_value=blog_select_mock)
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
+        table_mock.upsert.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         profile = _make_scraped_profile()
         profile.profile_pic_url = "https://cdn.instagram.com/avatar.jpg"
@@ -430,26 +430,19 @@ class TestHandleDiscover:
             payload={"hashtag": "beauty", "min_followers": 1000},
         )
 
-        mock_db = MagicMock()
-        table_mock = MagicMock()
+        mock_db = make_db_mock()
 
-        # Для mark_task_running/done — rpc и update
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        # person/blog insert результаты
+        person_result = MagicMock(data=[{"id": "person-1"}])
+        blog_result = MagicMock(data=[{"id": "blog-1"}])
 
-        # blogs select — нет существующих
-        empty_result = MagicMock()
-        empty_result.data = []
-        eq_chain = table_mock.select.return_value.eq.return_value.eq.return_value
-        eq_chain.limit.return_value.execute.return_value = empty_result
-        eq_chain.in_.return_value.limit.return_value.execute.return_value = empty_result
-
-        # person insert
-        person_result = MagicMock()
-        person_result.data = [{"id": "person-1"}]
-        table_mock.insert.return_value.execute.return_value = person_result
-
-        mock_db.table.return_value = table_mock
+        # Последовательность execute: blogs select → person insert → blog insert → mark_task_done
+        mock_db.table.return_value.execute = AsyncMock(side_effect=[
+            MagicMock(data=[]),  # blogs select — нет существующих
+            person_result,  # person insert
+            blog_result,  # blog insert
+            MagicMock(),  # mark_task_done
+        ])
 
         # Мок скрапера
         mock_scraper = AsyncMock()
@@ -464,7 +457,8 @@ class TestHandleDiscover:
 
         settings = MagicMock()
 
-        await handle_discover(mock_db, task, mock_scraper, settings)
+        with patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock):
+            await handle_discover(mock_db, task, mock_scraper, settings)
 
         mock_scraper.discover.assert_called_once_with("beauty", 1000)
 
@@ -478,21 +472,21 @@ class TestHandleDiscover:
             payload={"hashtag": "beauty", "min_followers": 1000},
         )
 
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
         table_mock = MagicMock()
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
 
         empty_result = MagicMock()
         empty_result.data = []
         in_chain = table_mock.select.return_value.eq.return_value.in_.return_value
-        in_chain.execute.return_value = empty_result
+        in_chain.execute = AsyncMock(return_value=empty_result)
 
         person_result = MagicMock()
         person_result.data = [{"id": "person-1"}]
         blog_result = MagicMock()
         blog_result.data = [{"id": "blog-1"}]
-        table_mock.insert.return_value.execute.side_effect = [person_result, blog_result]
+        table_mock.insert.return_value.execute = AsyncMock(side_effect=[person_result, blog_result])
         mock_db.table.return_value = table_mock
 
         mock_scraper = AsyncMock()
@@ -520,9 +514,9 @@ class TestHandleDiscover:
 
         task = _make_task("discover", payload={})
 
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
         table_mock = MagicMock()
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
 
         mock_scraper = AsyncMock()
@@ -543,17 +537,17 @@ class TestHandleDiscover:
             payload={"hashtag": "beauty", "min_followers": 1000},
         )
 
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
         table_mock = MagicMock()
 
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
 
         # batch blogs select — профиль уже существует
         existing_result = MagicMock()
         existing_result.data = [{"id": "existing-blog", "username": "existing_blogger", "scraped_at": None}]
         in_chain = table_mock.select.return_value.eq.return_value.in_.return_value
-        in_chain.execute.return_value = existing_result
+        in_chain.execute = AsyncMock(return_value=existing_result)
         mock_db.table.return_value = table_mock
 
         mock_scraper = AsyncMock()
@@ -586,17 +580,17 @@ class TestHandleDiscover:
             payload={"hashtag": "beauty", "min_followers": 1000},
         )
 
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
         table_mock = MagicMock()
 
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
 
         # batch blogs select — профиль уже существует
         existing_result = MagicMock()
         existing_result.data = [{"id": "existing-blog", "username": "stale_blogger", "scraped_at": None}]
         in_chain = table_mock.select.return_value.eq.return_value.in_.return_value
-        in_chain.execute.return_value = existing_result
+        in_chain.execute = AsyncMock(return_value=existing_result)
         mock_db.table.return_value = table_mock
 
         mock_scraper = AsyncMock()
@@ -630,9 +624,9 @@ class TestHandleDiscover:
 
         task = _make_task("discover", payload=None)
 
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
         table_mock = MagicMock()
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
 
         mock_scraper = AsyncMock()
@@ -650,11 +644,11 @@ class TestHandleDiscover:
         from src.worker.handlers import handle_discover
 
         task = _make_task("discover", payload={"hashtag": "test", "min_followers": 500})
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
         table_mock = MagicMock()
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         mock_scraper = AsyncMock()
         mock_scraper.discover.side_effect = AllAccountsCooldownError("All in cooldown")
@@ -674,11 +668,11 @@ class TestHandleDiscover:
         from src.worker.handlers import handle_discover
 
         task = _make_task("discover", payload={"hashtag": "test", "min_followers": 500})
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
         table_mock = MagicMock()
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         mock_scraper = AsyncMock()
         mock_scraper.discover.side_effect = RuntimeError("Connection timeout")
@@ -700,7 +694,7 @@ class TestHandleDiscover:
         from src.worker.handlers import handle_discover
 
         task = _make_task("discover", payload={"hashtag": "test", "min_followers": 500})
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         with patch(
             "src.worker.handlers.mark_task_running",
@@ -729,7 +723,12 @@ class TestHandleBatchResults:
         db = _mock_db_for_batch()
         mock_client = MagicMock()
 
-        with patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll:
+        with (
+            patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
+        ):
             mock_poll.return_value = {"status": "in_progress"}
             await handle_batch_results(db, mock_client, "batch-1", {"blog-1": "task-1"})
 
@@ -747,6 +746,9 @@ class TestHandleBatchResults:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.match_categories", new_callable=AsyncMock) as mock_match,
             patch("src.worker.handlers.match_tags", new_callable=AsyncMock),
             patch("src.worker.handlers.generate_embedding", new_callable=AsyncMock, return_value=None),
@@ -779,7 +781,12 @@ class TestHandleBatchResults:
         db = _mock_db_for_batch()
         mock_client = MagicMock()
 
-        with patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll:
+        with (
+            patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
+        ):
             mock_poll.return_value = {
                 "status": "completed",
                 "results": {"blog-2": None},
@@ -812,7 +819,12 @@ class TestHandleBatchResults:
         db = _mock_db_for_batch()
         mock_client = MagicMock()
 
-        with patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll:
+        with (
+            patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
+        ):
             mock_poll.return_value = {
                 "status": "completed",
                 "results": {"unknown-blog": AIInsights()},
@@ -843,6 +855,9 @@ class TestHandleBatchResults:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.match_categories", new_callable=AsyncMock) as mock_match,
             patch("src.worker.handlers.match_tags", new_callable=AsyncMock),
             patch("src.worker.handlers.generate_embedding", new_callable=AsyncMock, return_value=None),
@@ -872,6 +887,9 @@ class TestHandleBatchResults:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.mark_task_failed", new_callable=AsyncMock) as mock_fail,
         ):
             mock_poll.return_value = {"status": "failed"}
@@ -896,6 +914,9 @@ class TestHandleBatchResults:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.match_categories", new_callable=AsyncMock) as mock_match,
             patch("src.worker.handlers.match_tags", new_callable=AsyncMock),
             patch("src.worker.handlers.generate_embedding", new_callable=AsyncMock, return_value=None),
@@ -939,6 +960,9 @@ class TestHandleBatchResults:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.match_categories", new_callable=AsyncMock),
             patch("src.worker.handlers.match_tags", new_callable=AsyncMock),
             patch("src.worker.handlers.generate_embedding", new_callable=AsyncMock, return_value=None),
@@ -970,6 +994,9 @@ class TestHandleBatchResults:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.mark_task_failed", new_callable=AsyncMock) as mock_fail,
         ):
             # Нет результатов вообще — все задачи должны retry
@@ -1002,6 +1029,9 @@ class TestHandleBatchResults:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.match_categories", new_callable=AsyncMock),
             patch("src.worker.handlers.match_tags", new_callable=AsyncMock),
             patch("src.worker.handlers.generate_embedding", new_callable=AsyncMock, return_value=None),
@@ -1031,7 +1061,7 @@ class TestHandleBatchResultsEdge:
         """match_categories бросает исключение — задача всё равно должна быть помечена done."""
         from src.worker.handlers import handle_batch_results
 
-        db = MagicMock()
+        db = make_db_mock()
         mock_client = MagicMock()
 
         insights = AIInsights()
@@ -1041,7 +1071,9 @@ class TestHandleBatchResultsEdge:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock),
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.match_categories", new_callable=AsyncMock,
                   side_effect=RuntimeError("DB connection lost")),
             patch("src.worker.handlers.match_tags", new_callable=AsyncMock),
@@ -1062,13 +1094,16 @@ class TestHandleBatchResultsEdge:
         """poll_batch бросает — исключение пробрасывается, задачи остаются в running."""
         from src.worker.handlers import handle_batch_results
 
-        db = MagicMock()
+        db = make_db_mock()
         mock_client = MagicMock()
         task_ids_by_blog = {"blog-1": "task-1"}
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock,
                   side_effect=RuntimeError("OpenAI API error")),
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock) as mock_done,
         ):
             with pytest.raises(RuntimeError, match="OpenAI API error"):
@@ -1090,9 +1125,8 @@ class TestHandleAiAnalysis:
         settings.batch_min_size = 10  # Текущая задача добавляется, но batch_min_size не достигнут
         mock_client = MagicMock()
 
-        with patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = MagicMock(data=[])
-            await handle_ai_analysis(db, task, mock_client, settings)
+        db.table.return_value.execute = AsyncMock(return_value=MagicMock(data=[]))
+        await handle_ai_analysis(db, task, mock_client, settings)
 
         # submit_batch не должен вызываться (1 задача < batch_min_size=10)
         mock_client.files.create.assert_not_called()
@@ -1102,7 +1136,7 @@ class TestHandleAiAnalysis:
         """Задач меньше batch_min_size и не прошло 2 часа → пропуск."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
+        db = make_db_mock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
         settings.batch_min_size = 10
@@ -1113,19 +1147,17 @@ class TestHandleAiAnalysis:
             data=[{"id": "t1", "blog_id": "b1", "created_at": now_iso}]
         )
 
-        with patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = pending_data
-            await handle_ai_analysis(db, task, mock_client, settings)
-            # Только один вызов (select pending tasks), submit не вызван
-            assert mock_run.call_count == 1
+        db.table.return_value.execute = AsyncMock(return_value=pending_data)
+        await handle_ai_analysis(db, task, mock_client, settings)
+        # Только один вызов (select pending tasks), submit не вызван
+        assert db.table.return_value.execute.call_count == 1
 
     @pytest.mark.asyncio
     async def test_submits_when_threshold_reached(self) -> None:
         """Задач < batch_min_size, но старейшая > 2ч → батч отправляется."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
-        db.rpc.return_value.execute.return_value = MagicMock()
+        db = make_db_mock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
         settings.batch_min_size = 10
@@ -1144,12 +1176,13 @@ class TestHandleAiAnalysis:
         empty_data = MagicMock(data=[])
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock),
         ):
             # Последовательность: pending tasks → blogs batch → posts batch → highlights batch → save payload
-            mock_run.side_effect = [pending_data, blog_data, empty_data, empty_data, MagicMock()]
+            db.table.return_value.execute = AsyncMock(
+                side_effect=[pending_data, blog_data, empty_data, empty_data, MagicMock()],
+            )
             mock_submit.return_value = "batch-new"
             await handle_ai_analysis(db, task, mock_client, settings)
             mock_submit.assert_called_once()
@@ -1159,8 +1192,7 @@ class TestHandleAiAnalysis:
         """Ошибка при submit_batch → задачи откатываются через mark_task_failed(retry=True)."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
-        db.rpc.return_value.execute.return_value = MagicMock()
+        db = make_db_mock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
         settings.batch_min_size = 1
@@ -1177,21 +1209,19 @@ class TestHandleAiAnalysis:
             "followers_count": 1000, "following_count": 100, "media_count": 50,
         }])
         empty_data = MagicMock(data=[])
-        rollback_result = MagicMock()
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock),
             patch("src.worker.handlers.mark_task_failed", new_callable=AsyncMock) as mock_failed,
         ):
-            # pending tasks → blogs batch → posts batch → highlights batch → rollback update
-            mock_run.side_effect = [pending_data, blog_data, empty_data, empty_data, rollback_result]
+            # pending tasks → blogs batch → posts batch → highlights batch
+            db.table.return_value.execute = AsyncMock(side_effect=[pending_data, blog_data, empty_data, empty_data])
             mock_submit.side_effect = RuntimeError("OpenAI down")
             await handle_ai_analysis(db, task, mock_client, settings)
 
-        # 4 вызова run_in_thread: pending + blogs + posts + highlights
-        assert mock_run.call_count == 4
+        # 4 вызова execute: pending + blogs + posts + highlights
+        assert db.table.return_value.execute.call_count == 4
         mock_failed.assert_called_once()
         assert mock_failed.call_args.kwargs["retry"] is True
 
@@ -1200,8 +1230,7 @@ class TestHandleAiAnalysis:
         """Пост с taken_at=None не крашит весь батч — пропускается."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
-        db.rpc.return_value.execute.return_value = MagicMock()
+        db = make_db_mock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
         settings.batch_min_size = 1
@@ -1228,13 +1257,12 @@ class TestHandleAiAnalysis:
         empty_data = MagicMock(data=[])
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock),
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 pending_data, blog_data, posts_data, empty_data, MagicMock(),
-            ]
+            ])
             mock_submit.return_value = "batch-ok"
             # Не должен упасть — пост с None taken_at пропускается
             await handle_ai_analysis(db, task, mock_client, settings)
@@ -1253,8 +1281,7 @@ class TestHandleAiAnalysis:
         """Пост без platform_id пропускается."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
-        db.rpc.return_value.execute.return_value = MagicMock()
+        db = make_db_mock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
         settings.batch_min_size = 1
@@ -1278,13 +1305,12 @@ class TestHandleAiAnalysis:
         empty_data = MagicMock(data=[])
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock),
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 pending_data, blog_data, posts_data, empty_data, MagicMock(),
-            ]
+            ])
             mock_submit.return_value = "batch-ok"
             await handle_ai_analysis(db, task, mock_client, settings)
             mock_submit.assert_called_once()
@@ -1300,8 +1326,7 @@ class TestHandleAiAnalysis:
         """batch_min_size задач набралось → батч отправляется (даже если < 2ч)."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
-        db.rpc.return_value.execute.return_value = MagicMock()
+        db = make_db_mock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
         settings.batch_min_size = 2  # порог = 2 задачи
@@ -1332,16 +1357,15 @@ class TestHandleAiAnalysis:
         empty_data = MagicMock(data=[])
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock),
         ):
             # pending → blogs batch → posts batch → highlights batch → 2x save payload
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 pending_data,
                 blog_data, empty_data, empty_data,  # батчевая загрузка
                 MagicMock(), MagicMock(),  # save payload
-            ]
+            ])
             mock_submit.return_value = "batch-size"
             await handle_ai_analysis(db, task, mock_client, settings)
             mock_submit.assert_called_once()
@@ -1356,8 +1380,7 @@ class TestHandleAiAnalysis:
         """mark_task_running=False для части задач → только claimed попадают в батч."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
-        db.rpc.return_value.execute.return_value = MagicMock()
+        db = make_db_mock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
         settings.batch_min_size = 1
@@ -1388,7 +1411,6 @@ class TestHandleAiAnalysis:
         empty_data = MagicMock(data=[])
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch(
                 "src.worker.handlers.mark_task_running",
@@ -1397,11 +1419,11 @@ class TestHandleAiAnalysis:
                 side_effect=[True, False],
             ),
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 pending_data,
                 blog_data, empty_data, empty_data,  # батчевая загрузка
                 MagicMock(),  # save payload для t1
-            ]
+            ])
             mock_submit.return_value = "batch-partial"
             await handle_ai_analysis(db, task, mock_client, settings)
             mock_submit.assert_called_once()
@@ -1416,8 +1438,7 @@ class TestHandleAiAnalysis:
         """Ошибка отката одной задачи не мешает откату остальных."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
-        db.rpc.return_value.execute.return_value = MagicMock()
+        db = make_db_mock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
         settings.batch_min_size = 1
@@ -1448,23 +1469,22 @@ class TestHandleAiAnalysis:
         empty_data = MagicMock(data=[])
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock),
             patch("src.worker.handlers.mark_task_failed", new_callable=AsyncMock) as mock_failed,
         ):
             # pending → blogs batch → posts batch → hl batch
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 pending_data,
                 blog_data, empty_data, empty_data,  # батчевая загрузка
-            ]
+            ])
             mock_submit.side_effect = RuntimeError("OpenAI down")
 
             # Не должно крашить — второй откат должен выполниться
             await handle_ai_analysis(db, task, mock_client, settings)
 
-            # Должно быть 4 вызова run_in_thread: только батчевая загрузка
-            assert mock_run.call_count == 4
+            # Должно быть 4 вызова execute: только батчевая загрузка
+            assert db.table.return_value.execute.call_count == 4
             assert mock_failed.call_count == 2
 
     @pytest.mark.asyncio
@@ -1472,8 +1492,7 @@ class TestHandleAiAnalysis:
         """Задача с payload.text_only=True → submit_batch получает text_only_ids."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
-        db.rpc.return_value.execute.return_value = MagicMock()
+        db = make_db_mock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
         settings.batch_min_size = 1
@@ -1496,11 +1515,12 @@ class TestHandleAiAnalysis:
         empty_data = MagicMock(data=[])
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock),
         ):
-            mock_run.side_effect = [pending_data, blog_data, empty_data, empty_data, MagicMock()]
+            db.table.return_value.execute = AsyncMock(
+                side_effect=[pending_data, blog_data, empty_data, empty_data, MagicMock()],
+            )
             mock_submit.return_value = "batch-new"
             await handle_ai_analysis(db, task, mock_client, settings)
 
@@ -1513,8 +1533,7 @@ class TestHandleAiAnalysis:
         """batch_id сохраняется в payload не затирая text_only."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
-        db.rpc.return_value.execute.return_value = MagicMock()
+        db = make_db_mock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
         settings.batch_min_size = 1
@@ -1537,11 +1556,12 @@ class TestHandleAiAnalysis:
         empty_data = MagicMock(data=[])
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock),
         ):
-            mock_run.side_effect = [pending_data, blog_data, empty_data, empty_data, MagicMock()]
+            db.table.return_value.execute = AsyncMock(
+                side_effect=[pending_data, blog_data, empty_data, empty_data, MagicMock()],
+            )
             mock_submit.return_value = "batch-new"
             await handle_ai_analysis(db, task, mock_client, settings)
 
@@ -1559,7 +1579,7 @@ class TestHandleDiscoverEdge:
         """scraper.discover возвращает пустой список — задача помечается done."""
         from src.worker.handlers import handle_discover
 
-        db = MagicMock()
+        db = make_db_mock()
         settings = MagicMock()
         scraper = MagicMock()
         scraper.discover = AsyncMock(return_value=[])
@@ -1577,7 +1597,7 @@ class TestHandleDiscoverEdge:
         """Ошибка вставки person — профиль пропускается, остальные обрабатываются."""
         from src.worker.handlers import handle_discover
 
-        db = MagicMock()
+        db = make_db_mock()
         settings = MagicMock()
         scraper = MagicMock()
         scraper.discover = AsyncMock(return_value=[
@@ -1599,18 +1619,17 @@ class TestHandleDiscoverEdge:
 
         with (
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock) as mock_done,
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
         ):
             person_ok = MagicMock(data=[{"id": "person-2"}])
             blog_ok = MagicMock(data=[{"id": "blog-2"}])
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 MagicMock(data=[]),  # batch blogs select — ни одного нет
                 RuntimeError("DB insert failed"),  # baduser: person insert crash
                 person_ok,  # gooduser: person insert OK
                 blog_ok,  # gooduser: blog insert OK
-            ]
+            ])
 
             await handle_discover(db, task, scraper, settings)
 
@@ -1623,7 +1642,7 @@ class TestHandleDiscoverEdge:
         """Если blog insert упал после person insert, orphan person очищается."""
         from src.worker.handlers import handle_discover
 
-        db = MagicMock()
+        db = make_db_mock()
         settings = MagicMock()
         scraper = MagicMock()
         scraper.discover = AsyncMock(return_value=[
@@ -1639,15 +1658,14 @@ class TestHandleDiscoverEdge:
 
         with (
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.cleanup_orphan_person", new_callable=AsyncMock) as mock_cleanup,
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 MagicMock(data=[]),  # blogs select — profile does not exist
                 MagicMock(data=[{"id": "person-99"}]),  # person insert OK
                 RuntimeError("duplicate key"),  # blog insert fails
-            ]
+            ])
 
             await handle_discover(db, task, scraper, settings)
 
@@ -1657,7 +1675,7 @@ class TestHandleDiscoverEdge:
         """Все профили уже существуют и свежие — задача всё равно помечается done."""
         from src.worker.handlers import handle_discover
 
-        db = MagicMock()
+        db = make_db_mock()
         settings = MagicMock()
         scraper = MagicMock()
         scraper.discover = AsyncMock(return_value=[
@@ -1669,16 +1687,15 @@ class TestHandleDiscoverEdge:
 
         with (
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock) as mock_done,
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
             patch("src.worker.handlers.is_blog_fresh", new_callable=AsyncMock, return_value=True),
         ):
             # Оба профиля уже в базе (batch query возвращает оба)
-            mock_run.return_value = MagicMock(data=[
+            db.table.return_value.execute = AsyncMock(return_value=MagicMock(data=[
                 {"id": "existing-1", "username": "existing1", "scraped_at": None},
                 {"id": "existing-2", "username": "existing2", "scraped_at": None},
-            ])
+            ]))
 
             await handle_discover(db, task, scraper, settings)
 
@@ -1689,7 +1706,7 @@ class TestHandleDiscoverEdge:
         """Существующий блог устарел → создаётся full_scrape задача."""
         from src.worker.handlers import handle_discover
 
-        db = MagicMock()
+        db = make_db_mock()
         settings = MagicMock()
         scraper = MagicMock()
         scraper.discover = AsyncMock(return_value=[
@@ -1700,15 +1717,14 @@ class TestHandleDiscoverEdge:
 
         with (
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock) as mock_done,
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
             patch("src.worker.handlers.is_blog_fresh", new_callable=AsyncMock, return_value=False),
         ):
             # Блог уже в базе (batch query с username)
-            mock_run.return_value = MagicMock(data=[
+            db.table.return_value.execute = AsyncMock(return_value=MagicMock(data=[
                 {"id": "existing-blog", "username": "stale_user", "scraped_at": None},
-            ])
+            ]))
 
             await handle_discover(db, task, scraper, settings)
 
@@ -1719,7 +1735,7 @@ class TestHandleDiscoverEdge:
         """Существующий свежий блог → задача full_scrape не создаётся."""
         from src.worker.handlers import handle_discover
 
-        db = MagicMock()
+        db = make_db_mock()
         settings = MagicMock()
         scraper = MagicMock()
         scraper.discover = AsyncMock(return_value=[
@@ -1730,14 +1746,13 @@ class TestHandleDiscoverEdge:
 
         with (
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock) as mock_done,
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
             patch("src.worker.handlers.is_blog_fresh", new_callable=AsyncMock, return_value=True),
         ):
-            mock_run.return_value = MagicMock(data=[
+            db.table.return_value.execute = AsyncMock(return_value=MagicMock(data=[
                 {"id": "existing-blog", "username": "fresh_user", "scraped_at": None},
-            ])
+            ]))
 
             await handle_discover(db, task, scraper, settings)
 
@@ -1767,22 +1782,18 @@ class TestHandleDiscoverEdge:
         blogs_table.select.return_value = blogs_select_query
         blogs_select_query.eq.return_value = blogs_select_query
         blogs_select_query.in_.return_value = blogs_select_query
-        blogs_select_query.execute.return_value = MagicMock(data=[])
+        blogs_select_query.execute = AsyncMock(return_value=MagicMock(data=[]))
         blogs_table.insert.return_value = blogs_insert_query
-        blogs_insert_query.execute.return_value = MagicMock(data=[{"id": "blog-1"}])
+        blogs_insert_query.execute = AsyncMock(return_value=MagicMock(data=[{"id": "blog-1"}]))
 
         persons_table = MagicMock()
         persons_insert_query = MagicMock()
         persons_table.insert.return_value = persons_insert_query
-        persons_insert_query.execute.return_value = MagicMock(data=[{"id": "person-1"}])
+        persons_insert_query.execute = AsyncMock(return_value=MagicMock(data=[{"id": "person-1"}]))
 
         db.table.side_effect = lambda name: blogs_table if name == "blogs" else persons_table
 
-        async def passthrough(func, *args, **kwargs):
-            return func(*args, **kwargs)
-
         with (
-            patch("src.worker.handlers.run_in_thread", side_effect=passthrough),
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock),
@@ -1802,25 +1813,24 @@ class TestHandleFullScrapeEdge:
         """upsert_posts упал — blog откатывается в 'failed', задача помечается failed."""
         from src.worker.handlers import handle_full_scrape
 
-        db = MagicMock()
+        db = make_db_mock()
         task = _make_task("full_scrape")
         scraper = MagicMock()
         scraper.scrape_profile = AsyncMock(return_value=_make_scraped_profile())
 
         with (
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.persist_profile_images", new_callable=AsyncMock, return_value=(None, {})),
             patch("src.worker.handlers.upsert_blog", new_callable=AsyncMock),
             patch("src.worker.handlers.upsert_posts", new_callable=AsyncMock, side_effect=RuntimeError("DB error")),
             patch("src.worker.handlers.mark_task_failed", new_callable=AsyncMock) as mock_failed,
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock) as mock_done,
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 MagicMock(data=[{"username": "testblogger"}]),
                 MagicMock(),  # scrape_status = 'scraping'
                 MagicMock(),  # scrape_status = 'failed' (в except)
-            ]
+            ])
 
             await handle_full_scrape(db, task, scraper, _make_settings())
 
@@ -1833,7 +1843,7 @@ class TestHandleFullScrapeEdge:
         """Профиль без avatar/external_url/business_category — не крашится."""
         from src.worker.handlers import handle_full_scrape
 
-        db = MagicMock()
+        db = make_db_mock()
         task = _make_task("full_scrape")
         scraper = MagicMock()
 
@@ -1845,7 +1855,6 @@ class TestHandleFullScrapeEdge:
 
         with (
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.persist_profile_images", new_callable=AsyncMock, return_value=(None, {})),
             patch("src.worker.handlers.upsert_blog", new_callable=AsyncMock) as mock_upsert,
             patch("src.worker.handlers.upsert_posts", new_callable=AsyncMock),
@@ -1853,10 +1862,10 @@ class TestHandleFullScrapeEdge:
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock),
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock) as mock_done,
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 MagicMock(data=[{"username": "testblogger"}]),
                 MagicMock(),  # scrape_status = 'scraping'
-            ]
+            ])
 
             await handle_full_scrape(db, task, scraper, _make_settings())
 
@@ -1875,7 +1884,7 @@ class TestHandleFullScrapeNewFields:
         """Контактные поля добавляются в blog_data."""
         from src.worker.handlers import handle_full_scrape
 
-        db = MagicMock()
+        db = make_db_mock()
         task = _make_task("full_scrape")
         scraper = MagicMock()
 
@@ -1892,7 +1901,6 @@ class TestHandleFullScrapeNewFields:
 
         with (
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.persist_profile_images", new_callable=AsyncMock, return_value=(None, {})),
             patch("src.worker.handlers.upsert_blog", new_callable=AsyncMock) as mock_upsert,
             patch("src.worker.handlers.upsert_posts", new_callable=AsyncMock),
@@ -1900,10 +1908,10 @@ class TestHandleFullScrapeNewFields:
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock),
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 MagicMock(data=[{"username": "testblogger"}]),
                 MagicMock(),
-            ]
+            ])
 
             await handle_full_scrape(db, task, scraper, _make_settings())
 
@@ -1923,7 +1931,7 @@ class TestHandleFullScrapeNewFields:
         """full_name всегда записывается в blog_data (даже пустая строка)."""
         from src.worker.handlers import handle_full_scrape
 
-        db = MagicMock()
+        db = make_db_mock()
         task = _make_task("full_scrape")
         scraper = MagicMock()
 
@@ -1932,7 +1940,6 @@ class TestHandleFullScrapeNewFields:
 
         with (
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.persist_profile_images", new_callable=AsyncMock, return_value=(None, {})),
             patch("src.worker.handlers.upsert_blog", new_callable=AsyncMock) as mock_upsert,
             patch("src.worker.handlers.upsert_posts", new_callable=AsyncMock),
@@ -1940,10 +1947,10 @@ class TestHandleFullScrapeNewFields:
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock),
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 MagicMock(data=[{"username": "testblogger"}]),
                 MagicMock(),
-            ]
+            ])
 
             await handle_full_scrape(db, task, scraper, _make_settings())
 
@@ -1957,7 +1964,7 @@ class TestHandleFullScrapeNewFields:
         """external_url не записывается если None."""
         from src.worker.handlers import handle_full_scrape
 
-        db = MagicMock()
+        db = make_db_mock()
         task = _make_task("full_scrape")
         scraper = MagicMock()
 
@@ -1967,7 +1974,6 @@ class TestHandleFullScrapeNewFields:
 
         with (
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.persist_profile_images", new_callable=AsyncMock, return_value=(None, {})),
             patch("src.worker.handlers.upsert_blog", new_callable=AsyncMock) as mock_upsert,
             patch("src.worker.handlers.upsert_posts", new_callable=AsyncMock),
@@ -1975,10 +1981,10 @@ class TestHandleFullScrapeNewFields:
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock),
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 MagicMock(data=[{"username": "testblogger"}]),
                 MagicMock(),
-            ]
+            ])
 
             await handle_full_scrape(db, task, scraper, _make_settings())
 
@@ -1989,7 +1995,7 @@ class TestHandleFullScrapeNewFields:
         """None контактные поля не добавляются в blog_data."""
         from src.worker.handlers import handle_full_scrape
 
-        db = MagicMock()
+        db = make_db_mock()
         task = _make_task("full_scrape")
         scraper = MagicMock()
 
@@ -1998,7 +2004,6 @@ class TestHandleFullScrapeNewFields:
 
         with (
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.persist_profile_images", new_callable=AsyncMock, return_value=(None, {})),
             patch("src.worker.handlers.upsert_blog", new_callable=AsyncMock) as mock_upsert,
             patch("src.worker.handlers.upsert_posts", new_callable=AsyncMock),
@@ -2006,10 +2011,10 @@ class TestHandleFullScrapeNewFields:
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock),
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 MagicMock(data=[{"username": "testblogger"}]),
                 MagicMock(),
-            ]
+            ])
 
             await handle_full_scrape(db, task, scraper, _make_settings())
 
@@ -2022,7 +2027,7 @@ class TestHandleFullScrapeNewFields:
         """avg_reels_views рассчитывается из play_count рилсов."""
         from src.worker.handlers import handle_full_scrape
 
-        db = MagicMock()
+        db = make_db_mock()
         task = _make_task("full_scrape")
         scraper = MagicMock()
 
@@ -2074,7 +2079,6 @@ class TestHandleFullScrapeNewFields:
 
         with (
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.persist_profile_images", new_callable=AsyncMock, return_value=(None, {})),
             patch("src.worker.handlers.upsert_blog", new_callable=AsyncMock) as mock_upsert,
             patch("src.worker.handlers.upsert_posts", new_callable=AsyncMock),
@@ -2082,10 +2086,10 @@ class TestHandleFullScrapeNewFields:
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock),
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 MagicMock(data=[{"username": "testblogger"}]),
                 MagicMock(),
-            ]
+            ])
 
             await handle_full_scrape(db, task, scraper, _make_settings())
 
@@ -2097,7 +2101,7 @@ class TestHandleFullScrapeNewFields:
         """avg_reels_views = None, если нет рилсов с play_count."""
         from src.worker.handlers import handle_full_scrape
 
-        db = MagicMock()
+        db = make_db_mock()
         task = _make_task("full_scrape")
         scraper = MagicMock()
 
@@ -2117,7 +2121,6 @@ class TestHandleFullScrapeNewFields:
 
         with (
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.persist_profile_images", new_callable=AsyncMock, return_value=(None, {})),
             patch("src.worker.handlers.upsert_blog", new_callable=AsyncMock) as mock_upsert,
             patch("src.worker.handlers.upsert_posts", new_callable=AsyncMock),
@@ -2125,10 +2128,10 @@ class TestHandleFullScrapeNewFields:
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock),
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 MagicMock(data=[{"username": "testblogger"}]),
                 MagicMock(),
-            ]
+            ])
 
             await handle_full_scrape(db, task, scraper, _make_settings())
 
@@ -2143,7 +2146,7 @@ class TestLoadProfilesBioLinksCompat:
         """Старый формат bio_links ['url'] нормализуется в [{url, title, link_type}]."""
         from src.worker.handlers import _load_profiles_for_batch
 
-        db = MagicMock()
+        db = make_db_mock()
         pending_tasks = [{"id": "t1", "blog_id": "b1", "attempts": 0, "max_attempts": 3}]
 
         blogs_result = MagicMock(data=[{
@@ -2154,9 +2157,8 @@ class TestLoadProfilesBioLinksCompat:
         }])
         empty_data = MagicMock(data=[])
 
-        with patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.side_effect = [blogs_result, empty_data, empty_data]
-            profiles, _task_ids, _failed = await _load_profiles_for_batch(db, pending_tasks)
+        db.table.return_value.execute = AsyncMock(side_effect=[blogs_result, empty_data, empty_data])
+        profiles, _task_ids, _failed = await _load_profiles_for_batch(db, pending_tasks)
 
         assert len(profiles) == 1
         _, profile = profiles[0]
@@ -2168,7 +2170,7 @@ class TestLoadProfilesBioLinksCompat:
         """Новый формат bio_links [{url, title, link_type}] сохраняется как есть."""
         from src.worker.handlers import _load_profiles_for_batch
 
-        db = MagicMock()
+        db = make_db_mock()
         pending_tasks = [{"id": "t1", "blog_id": "b1", "attempts": 0, "max_attempts": 3}]
 
         blogs_result = MagicMock(data=[{
@@ -2179,9 +2181,8 @@ class TestLoadProfilesBioLinksCompat:
         }])
         empty_data = MagicMock(data=[])
 
-        with patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.side_effect = [blogs_result, empty_data, empty_data]
-            profiles, _task_ids, _failed = await _load_profiles_for_batch(db, pending_tasks)
+        db.table.return_value.execute = AsyncMock(side_effect=[blogs_result, empty_data, empty_data])
+        profiles, _task_ids, _failed = await _load_profiles_for_batch(db, pending_tasks)
 
         _, profile = profiles[0]
         assert profile.bio_links[0].title == "TG"
@@ -2190,7 +2191,7 @@ class TestLoadProfilesBioLinksCompat:
         """bio_links=None → пустой список."""
         from src.worker.handlers import _load_profiles_for_batch
 
-        db = MagicMock()
+        db = make_db_mock()
         pending_tasks = [{"id": "t1", "blog_id": "b1", "attempts": 0, "max_attempts": 3}]
 
         blogs_result = MagicMock(data=[{
@@ -2201,9 +2202,8 @@ class TestLoadProfilesBioLinksCompat:
         }])
         empty_data = MagicMock(data=[])
 
-        with patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.side_effect = [blogs_result, empty_data, empty_data]
-            profiles, _task_ids, _failed = await _load_profiles_for_batch(db, pending_tasks)
+        db.table.return_value.execute = AsyncMock(side_effect=[blogs_result, empty_data, empty_data])
+        profiles, _task_ids, _failed = await _load_profiles_for_batch(db, pending_tasks)
 
         _, profile = profiles[0]
         assert profile.bio_links == []
@@ -2212,7 +2212,7 @@ class TestLoadProfilesBioLinksCompat:
         """top_comments из blog_posts прокидываются в ScrapedPost для AI-анализа."""
         from src.worker.handlers import _load_profiles_for_batch
 
-        db = MagicMock()
+        db = make_db_mock()
         pending_tasks = [{"id": "t1", "blog_id": "b1", "attempts": 0, "max_attempts": 3}]
 
         blogs_result = MagicMock(data=[{
@@ -2234,9 +2234,8 @@ class TestLoadProfilesBioLinksCompat:
         }])
         empty_data = MagicMock(data=[])
 
-        with patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.side_effect = [blogs_result, posts_result, empty_data]
-            profiles, _, _ = await _load_profiles_for_batch(db, pending_tasks)
+        db.table.return_value.execute = AsyncMock(side_effect=[blogs_result, posts_result, empty_data])
+        profiles, _, _ = await _load_profiles_for_batch(db, pending_tasks)
 
         _, profile = profiles[0]
         assert len(profile.medias) == 1
@@ -2273,23 +2272,20 @@ class TestHandleDiscoverNewFields:
         blogs_insert_query = MagicMock()
         blogs_table.select.return_value = blogs_select_query
         blogs_select_query.eq.return_value = blogs_select_query
+        blogs_select_query.in_.return_value = blogs_select_query
         blogs_select_query.limit.return_value = blogs_select_query
-        blogs_select_query.execute.return_value = MagicMock(data=[])
+        blogs_select_query.execute = AsyncMock(return_value=MagicMock(data=[]))
         blogs_table.insert.return_value = blogs_insert_query
-        blogs_insert_query.execute.return_value = MagicMock(data=[{"id": "blog-1"}])
+        blogs_insert_query.execute = AsyncMock(return_value=MagicMock(data=[{"id": "blog-1"}]))
 
         persons_table = MagicMock()
         persons_insert_query = MagicMock()
         persons_table.insert.return_value = persons_insert_query
-        persons_insert_query.execute.return_value = MagicMock(data=[{"id": "person-1"}])
+        persons_insert_query.execute = AsyncMock(return_value=MagicMock(data=[{"id": "person-1"}]))
 
         db.table.side_effect = lambda name: blogs_table if name == "blogs" else persons_table
 
-        async def passthrough(func, *args, **kwargs):
-            return func(*args, **kwargs)
-
         with (
-            patch("src.worker.handlers.run_in_thread", side_effect=passthrough),
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock),
@@ -2310,7 +2306,7 @@ class TestHandleAiAnalysisBlogNotFound:
         """Если blog_id не найден в БД — задача помечается failed, не висит в pending."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
+        db = make_db_mock()
         db.rpc.return_value.execute.return_value = MagicMock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
@@ -2326,12 +2322,11 @@ class TestHandleAiAnalysisBlogNotFound:
         empty_data = MagicMock(data=[])
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch("src.worker.handlers.mark_task_failed", new_callable=AsyncMock) as mock_failed,
         ):
             # pending → blogs batch (empty) → posts batch → highlights batch
-            mock_run.side_effect = [pending_data, empty_blog, empty_data, empty_data]
+            db.table.return_value.execute = AsyncMock(side_effect=[pending_data, empty_blog, empty_data, empty_data])
             await handle_ai_analysis(db, task, mock_client, settings)
 
             # submit_batch НЕ вызван (нет профилей)
@@ -2350,7 +2345,7 @@ class TestHandleAiAnalysisBlogNotFound:
         """Один блог найден, другой нет — первый попадает в батч, второй failed."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
+        db = make_db_mock()
         db.rpc.return_value.execute.return_value = MagicMock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
@@ -2374,17 +2369,16 @@ class TestHandleAiAnalysisBlogNotFound:
         empty_data = MagicMock(data=[])
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
             patch("src.worker.handlers.mark_task_failed", new_callable=AsyncMock) as mock_failed,
         ):
             # pending → blogs batch (only b1) → posts batch → highlights batch → save payload
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 pending_data,
                 blog_data, empty_data, empty_data,  # батчевая загрузка
                 MagicMock(),  # save payload для t1
-            ]
+            ])
             mock_submit.return_value = "batch-ok"
             await handle_ai_analysis(db, task, mock_client, settings)
 
@@ -2405,7 +2399,7 @@ class TestHandleAiAnalysisHighlightsEdge:
         """Хайлайт без platform_id не крашит весь батч — пропускается."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
+        db = make_db_mock()
         db.rpc.return_value.execute.return_value = MagicMock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
@@ -2430,13 +2424,12 @@ class TestHandleAiAnalysisHighlightsEdge:
         ])
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 pending_data, blog_data, empty_data, highlights_data, MagicMock(),
-            ]
+            ])
             mock_submit.return_value = "batch-ok"
 
             # Не должен крашить с KeyError
@@ -2452,7 +2445,7 @@ class TestHandleAiAnalysisHighlightsEdge:
         """Хайлайт без title — пропускается."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
+        db = make_db_mock()
         db.rpc.return_value.execute.return_value = MagicMock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
@@ -2475,13 +2468,12 @@ class TestHandleAiAnalysisHighlightsEdge:
         ])
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 pending_data, blog_data, empty_data, highlights_data, MagicMock(),
-            ]
+            ])
             mock_submit.return_value = "batch-ok"
 
             # Не должен крашить с KeyError
@@ -2499,7 +2491,7 @@ class TestHandleAiAnalysisCreatedAtEdge:
         """Задача с created_at=None → TypeError при min() (BUG)."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
+        db = make_db_mock()
         db.rpc.return_value.execute.return_value = MagicMock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
@@ -2519,13 +2511,12 @@ class TestHandleAiAnalysisCreatedAtEdge:
         empty_data = MagicMock(data=[])
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 pending_data, blog_data, empty_data, empty_data, MagicMock(),
-            ]
+            ])
             mock_submit.return_value = "batch-ok"
 
             # Сейчас крашится TypeError — после фикса должен работать
@@ -2536,8 +2527,7 @@ class TestHandleAiAnalysisCreatedAtEdge:
         """Смешанные created_at: None + валидная дата → не крашит."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
-        db.rpc.return_value.execute.return_value = MagicMock()
+        db = make_db_mock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
         settings.batch_min_size = 1
@@ -2568,15 +2558,14 @@ class TestHandleAiAnalysisCreatedAtEdge:
         empty_data = MagicMock(data=[])
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 pending_data,
                 blog_data, empty_data, empty_data,  # батчевая загрузка
                 MagicMock(), MagicMock(),  # save payload
-            ]
+            ])
             mock_submit.return_value = "batch-ok"
 
             # Не должен крашить TypeError
@@ -2591,7 +2580,7 @@ class TestHandleAiAnalysisUsernameEdge:
         """blog из БД без ключа 'username' → KeyError (BUG)."""
         from src.worker.handlers import handle_ai_analysis
 
-        db = MagicMock()
+        db = make_db_mock()
         db.rpc.return_value.execute.return_value = MagicMock()
         task = _make_task("ai_analysis")
         settings = MagicMock()
@@ -2612,13 +2601,12 @@ class TestHandleAiAnalysisUsernameEdge:
         empty_data = MagicMock(data=[])
 
         with (
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.submit_batch", new_callable=AsyncMock) as mock_submit,
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 pending_data, blog_data, empty_data, empty_data, MagicMock(),
-            ]
+            ])
             mock_submit.return_value = "batch-ok"
 
             # Сейчас крашится KeyError — после фикса должен работать
@@ -2633,7 +2621,7 @@ class TestHandleBatchResultsGetTaskId:
         """task_ids_by_blog с dict без ключа 'id' → KeyError (BUG)."""
         from src.worker.handlers import handle_batch_results
 
-        db = MagicMock()
+        db = make_db_mock()
         mock_client = MagicMock()
         insights = AIInsights()
 
@@ -2642,7 +2630,9 @@ class TestHandleBatchResultsGetTaskId:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock),
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock) as mock_done,
         ):
             mock_poll.return_value = {
@@ -2660,7 +2650,7 @@ class TestHandleBatchResultsGetTaskId:
         """Expired путь: dict без 'id' → пропускается, не крашит."""
         from src.worker.handlers import handle_batch_results
 
-        db = MagicMock()
+        db = make_db_mock()
         mock_client = MagicMock()
 
         # dict без ключа "id" в expired пути
@@ -2671,7 +2661,9 @@ class TestHandleBatchResultsGetTaskId:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock),
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.mark_task_failed", new_callable=AsyncMock) as mock_fail,
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
         ):
@@ -2703,6 +2695,9 @@ class TestHandleBatchResultsTagsAndEmbedding:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.match_categories", new_callable=AsyncMock),
             patch("src.worker.handlers.match_tags", new_callable=AsyncMock) as mock_tags,
             patch("src.worker.handlers.generate_embedding", new_callable=AsyncMock, return_value=None),
@@ -2732,12 +2727,14 @@ class TestHandleBatchResultsTagsAndEmbedding:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.match_categories", new_callable=AsyncMock),
             patch("src.worker.handlers.match_tags", new_callable=AsyncMock),
             patch("src.worker.handlers.build_embedding_text", return_value="тестовый текст"),
             patch("src.worker.handlers.generate_embedding", new_callable=AsyncMock,
                   return_value=fake_vector) as mock_embed,
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock),
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
         ):
             mock_poll.return_value = {
@@ -2773,11 +2770,13 @@ class TestHandleBatchResultsTagsAndEmbedding:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.match_categories", new_callable=AsyncMock),
             patch("src.worker.handlers.match_tags", new_callable=AsyncMock),
             patch("src.worker.handlers.generate_embedding", new_callable=AsyncMock,
                   return_value=None),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
         ):
             mock_poll.return_value = {
@@ -2788,19 +2787,20 @@ class TestHandleBatchResultsTagsAndEmbedding:
                 db, mock_client, "batch-1", {"blog-1": "task-1"}
             )
 
-            # run_in_thread НЕ вызывается для embedding (только для insights save)
-            embedding_calls = [
-                c for c in mock_run.call_args_list
-                if "embedding" in str(c)
+            # update не должен вызываться с embedding полем (embedding=None → не сохраняется)
+            update_calls = db.table.return_value.update.call_args_list
+            embedding_updates = [
+                c[0][0] for c in update_calls
+                if isinstance(c[0][0], dict) and "embedding" in c[0][0]
             ]
-            assert len(embedding_calls) == 0
+            assert len(embedding_updates) == 0
 
     @pytest.mark.asyncio
     async def test_batch_results_tag_error_does_not_block(self) -> None:
         """Ошибка match_tags не блокирует остальную обработку."""
         from src.worker.handlers import handle_batch_results
 
-        db = MagicMock()
+        db = make_db_mock()
         mock_client = MagicMock()
         insights = AIInsights()
         insights.content.primary_categories = ["Beauty"]
@@ -2809,7 +2809,9 @@ class TestHandleBatchResultsTagsAndEmbedding:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock),
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.match_categories", new_callable=AsyncMock),
             patch("src.worker.handlers.match_tags", new_callable=AsyncMock,
                   side_effect=RuntimeError("Tag DB error")),
@@ -2831,7 +2833,7 @@ class TestHandleBatchResultsTagsAndEmbedding:
         """Ошибка генерации embedding не блокирует остальную обработку."""
         from src.worker.handlers import handle_batch_results
 
-        db = MagicMock()
+        db = make_db_mock()
         mock_client = MagicMock()
         insights = AIInsights()
 
@@ -2839,7 +2841,9 @@ class TestHandleBatchResultsTagsAndEmbedding:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock),
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.match_categories", new_callable=AsyncMock),
             patch("src.worker.handlers.match_tags", new_callable=AsyncMock),
             patch("src.worker.handlers.build_embedding_text",
@@ -2866,6 +2870,9 @@ class TestHandleBatchResultsTagsAndEmbedding:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
+            patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.match_categories", new_callable=AsyncMock) as mock_cat,
             patch("src.worker.handlers.match_tags", new_callable=AsyncMock) as mock_tags,
             patch("src.worker.handlers.generate_embedding", new_callable=AsyncMock) as mock_embed,
@@ -2893,17 +2900,17 @@ class TestHandleBatchResultsTagsAndEmbedding:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
         ):
             # current_by_id запрос (scrape_status != ai_refused)
-            mock_run.return_value = MagicMock(data=[
+            db.table.return_value.execute = AsyncMock(return_value=MagicMock(data=[
                 {"id": "blog-1", "city": None, "content_language": None,
                  "audience_gender": None, "scrape_status": "scraped"},
-            ])
+            ]))
             mock_poll.return_value = {
                 "status": "completed",
                 "results": {"blog-1": ("refusal", "Content policy violation")},
@@ -2928,17 +2935,17 @@ class TestHandleBatchResultsTagsAndEmbedding:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
             patch("src.worker.handlers.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
         ):
             # current_by_id: уже ai_refused
-            mock_run.return_value = MagicMock(data=[
+            db.table.return_value.execute = AsyncMock(return_value=MagicMock(data=[
                 {"id": "blog-1", "city": None, "content_language": None,
                  "audience_gender": None, "scrape_status": "ai_refused"},
-            ])
+            ]))
             mock_poll.return_value = {
                 "status": "completed",
                 "results": {"blog-1": ("refusal", "Content policy violation again")},
@@ -2962,9 +2969,9 @@ class TestHandleBatchResultsTagsAndEmbedding:
 
         with (
             patch("src.worker.handlers.poll_batch", new_callable=AsyncMock) as mock_poll,
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.load_categories", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.load_tags", new_callable=AsyncMock, return_value={}),
+            patch("src.worker.handlers.load_cities", new_callable=AsyncMock, return_value={}),
             patch("src.worker.handlers.match_categories", new_callable=AsyncMock,
                   return_value={"total": 0, "matched": 0, "unmatched": 0}),
             patch("src.worker.handlers.match_tags", new_callable=AsyncMock,
@@ -2973,16 +2980,9 @@ class TestHandleBatchResultsTagsAndEmbedding:
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock) as mock_done,
             patch("src.worker.handlers.mark_task_failed", new_callable=AsyncMock) as mock_fail,
         ):
-            mock_run.return_value = MagicMock(data=[
-                {"id": "blog-bad", "city": None, "content_language": None,
-                 "audience_gender": None, "scrape_status": "active"},
-                {"id": "blog-ok", "city": None, "content_language": None,
-                 "audience_gender": None, "scrape_status": "active"},
-            ])
-            # blog-bad вызовет ошибку при update, blog-ok обработается нормально
             call_count = 0
 
-            async def _side_effect_run(func, *args, **kwargs):
+            async def _side_effect_execute():
                 nonlocal call_count
                 call_count += 1
                 # Первый вызов — SELECT blogs, второй и далее — UPDATE
@@ -2998,7 +2998,7 @@ class TestHandleBatchResultsTagsAndEmbedding:
                     raise Exception("\\u0000 cannot be converted to text")
                 return MagicMock(data=[])
 
-            mock_run.side_effect = _side_effect_run
+            db.table.return_value.execute = AsyncMock(side_effect=_side_effect_execute)
 
             mock_poll.return_value = {
                 "status": "completed",
@@ -3085,11 +3085,11 @@ class TestErrorHandlingConsistency:
         from src.worker.handlers import handle_discover
 
         task = _make_task("discover", payload={"hashtag": "test", "min_followers": 500})
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
         table_mock = MagicMock()
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         mock_scraper = AsyncMock()
         # Ошибка с потенциальными credentials в URL
@@ -3116,16 +3116,16 @@ class TestErrorHandlingConsistency:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         blog_select_mock = MagicMock()
         blog_select_mock.data = [{"username": "testblogger"}]
 
         table_mock = MagicMock()
-        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute = AsyncMock(return_value=blog_select_mock)
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         mock_scraper = AsyncMock()
         mock_scraper.scrape_profile.side_effect = RuntimeError("Unexpected error")
@@ -3149,16 +3149,16 @@ class TestErrorHandlingConsistency:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         blog_select_mock = MagicMock()
         blog_select_mock.data = [{"username": "testblogger"}]
 
         table_mock = MagicMock()
-        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute = AsyncMock(return_value=blog_select_mock)
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         mock_scraper = AsyncMock()
         mock_scraper.scrape_profile.side_effect = HikerAPIError(
@@ -3182,16 +3182,16 @@ class TestErrorHandlingConsistency:
         from src.worker.handlers import handle_full_scrape
 
         task = _make_task("full_scrape")
-        mock_db = MagicMock()
+        mock_db = make_db_mock()
 
         blog_select_mock = MagicMock()
         blog_select_mock.data = [{"username": "testblogger"}]
 
         table_mock = MagicMock()
-        table_mock.select.return_value.eq.return_value.execute.return_value = blog_select_mock
-        table_mock.update.return_value.eq.return_value.execute.return_value = MagicMock()
+        table_mock.select.return_value.eq.return_value.execute = AsyncMock(return_value=blog_select_mock)
+        table_mock.update.return_value.eq.return_value.execute = AsyncMock(return_value=MagicMock())
         mock_db.table.return_value = table_mock
-        mock_db.rpc.return_value.execute.return_value = MagicMock()
+        mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock())
 
         mock_scraper = AsyncMock()
         mock_scraper.scrape_profile.side_effect = HikerAPIError(
@@ -3212,7 +3212,7 @@ class TestErrorHandlingConsistency:
         """Ошибка создания блога в handle_discover логируется с [discover] префиксом."""
         from src.worker.handlers import handle_discover
 
-        db = MagicMock()
+        db = make_db_mock()
         settings = MagicMock()
         scraper = MagicMock()
         scraper.discover = AsyncMock(return_value=[
@@ -3228,16 +3228,15 @@ class TestErrorHandlingConsistency:
 
         with (
             patch("src.worker.handlers.mark_task_running", new_callable=AsyncMock, return_value=True),
-            patch("src.worker.handlers.run_in_thread", new_callable=AsyncMock) as mock_run,
             patch("src.worker.handlers.mark_task_done", new_callable=AsyncMock),
             patch("src.worker.handlers.cleanup_orphan_person", new_callable=AsyncMock) as mock_cleanup,
             patch("src.worker.handlers.logger") as mock_logger,
         ):
-            mock_run.side_effect = [
+            db.table.return_value.execute = AsyncMock(side_effect=[
                 MagicMock(data=[]),  # batch blogs select — нет совпадений
                 MagicMock(data=[{"id": "person-99"}]),  # person insert OK
                 RuntimeError("duplicate key"),  # blog insert fails
-            ]
+            ])
 
             await handle_discover(db, task, scraper, settings)
 

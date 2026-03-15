@@ -39,6 +39,9 @@ packages = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore:coroutine 'create_supabase_sink.*_write' was never awaited:RuntimeWarning",
+]
 
 [tool.ruff]
 target-version = "py313"

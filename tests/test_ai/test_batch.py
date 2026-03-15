@@ -1036,25 +1036,47 @@ class TestPollBatch:
         assert result["results"]["blog-dup"].confidence == 5
 
 
+def _mock_taxonomy_db(table_data: list[dict] | None = None) -> MagicMock:
+    """Создать мок AsyncClient для тестов taxonomy_matching.
+
+    Настраивает async .execute() на table-цепочках и rpc-цепочках.
+    """
+    mock_db = MagicMock()
+    # table().select().eq().execute() — async
+    table_chain = MagicMock()
+    mock_db.table.return_value = table_chain
+    table_chain.select.return_value = table_chain
+    table_chain.eq.return_value = table_chain
+    table_chain.upsert.return_value = table_chain
+    if table_data is not None:
+        table_chain.execute = AsyncMock(return_value=MagicMock(data=table_data))
+    else:
+        table_chain.execute = AsyncMock(return_value=MagicMock(data=[]))
+    # rpc().execute() — async
+    mock_db.rpc.return_value.execute = AsyncMock(return_value=MagicMock(data=[]))
+    return mock_db
+
+
 class TestMatchCategories:
     """Тесты сопоставления тем с категориями."""
 
     @pytest.mark.asyncio
     async def test_matches_primary_and_secondary(self) -> None:
-        from src.ai.taxonomy_matching import match_categories
+        from src.ai.taxonomy_matching import invalidate_taxonomy_cache, match_categories
 
+        invalidate_taxonomy_cache()
         insights = AIInsights()
         insights.content.primary_categories = ["beauty"]  # код категории
         insights.content.secondary_topics = ["Fashion", "Travel"]  # русские/англ. названия
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
         cat_mock = MagicMock()
         cat_mock.data = [
             {"id": "cat-1", "code": "beauty", "name": "Красота", "parent_id": None},
             {"id": "cat-2", "code": "fashion", "name": "fashion", "parent_id": None},
             {"id": "cat-3", "code": "travel", "name": "travel", "parent_id": None},
         ]
-        mock_db.table.return_value.select.return_value.execute.return_value = cat_mock
+        mock_db.table.return_value.select.return_value.execute = AsyncMock(return_value=cat_mock)
 
         stats = await match_categories(mock_db, "blog-1", insights)
 
@@ -1072,7 +1094,7 @@ class TestMatchCategories:
         insights = AIInsights()
         insights.content.primary_categories = []
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         await match_categories(mock_db, "blog-1", insights)
 
@@ -1081,19 +1103,20 @@ class TestMatchCategories:
     @pytest.mark.asyncio
     async def test_no_matching_categories_in_db(self) -> None:
         """Тема есть, но в categories таблице совпадений нет → upsert не вызывается."""
-        from src.ai.taxonomy_matching import match_categories
+        from src.ai.taxonomy_matching import invalidate_taxonomy_cache, match_categories
 
+        invalidate_taxonomy_cache()
         insights = AIInsights()
         insights.content.primary_categories = ["cooking"]  # код, которого нет в БД
         insights.content.secondary_topics = ["Gardening"]
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
         cat_mock = MagicMock()
         cat_mock.data = [
             {"id": "cat-1", "code": "beauty", "name": "Красота", "parent_id": None},
             {"id": "cat-2", "code": "fashion", "name": "Мода", "parent_id": None},
         ]
-        mock_db.table.return_value.select.return_value.execute.return_value = cat_mock
+        mock_db.table.return_value.select.return_value.execute = AsyncMock(return_value=cat_mock)
 
         await match_categories(mock_db, "blog-1", insights)
 
@@ -1103,18 +1126,19 @@ class TestMatchCategories:
     @pytest.mark.asyncio
     async def test_no_secondary_topics(self) -> None:
         """Только primary_categories, без secondary → delete + insert."""
-        from src.ai.taxonomy_matching import match_categories
+        from src.ai.taxonomy_matching import invalidate_taxonomy_cache, match_categories
 
+        invalidate_taxonomy_cache()
         insights = AIInsights()
         insights.content.primary_categories = ["beauty"]  # код категории
         insights.content.secondary_topics = []
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
         cat_mock = MagicMock()
         cat_mock.data = [
             {"id": "cat-1", "code": "beauty", "name": "Красота", "parent_id": None},
         ]
-        mock_db.table.return_value.select.return_value.execute.return_value = cat_mock
+        mock_db.table.return_value.select.return_value.execute = AsyncMock(return_value=cat_mock)
 
         await match_categories(mock_db, "blog-1", insights)
 
@@ -1127,19 +1151,20 @@ class TestMatchCategories:
     @pytest.mark.asyncio
     async def test_case_insensitive_matching(self) -> None:
         """Сопоставление нечувствительно к регистру."""
-        from src.ai.taxonomy_matching import match_categories
+        from src.ai.taxonomy_matching import invalidate_taxonomy_cache, match_categories
 
+        invalidate_taxonomy_cache()
         insights = AIInsights()
         insights.content.primary_categories = ["BEAUTY"]  # код в верхнем регистре
         insights.content.secondary_topics = ["Макияж"]
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
         cat_mock = MagicMock()
         cat_mock.data = [
             {"id": "cat-1", "code": "beauty", "name": "Красота", "parent_id": None},
             {"id": "sub-1", "code": None, "name": "Макияж", "parent_id": "cat-1"},
         ]
-        mock_db.table.return_value.select.return_value.execute.return_value = cat_mock
+        mock_db.table.return_value.select.return_value.execute = AsyncMock(return_value=cat_mock)
 
         await match_categories(mock_db, "blog-1", insights)
 
@@ -1152,19 +1177,20 @@ class TestMatchCategories:
     @pytest.mark.asyncio
     async def test_primary_is_secondary_upserts_correctly(self) -> None:
         """is_primary=False для secondary topics."""
-        from src.ai.taxonomy_matching import match_categories
+        from src.ai.taxonomy_matching import invalidate_taxonomy_cache, match_categories
 
+        invalidate_taxonomy_cache()
         insights = AIInsights()
         insights.content.primary_categories = ["beauty"]  # код категории
         insights.content.secondary_topics = ["Путешествия"]  # русское название подкатегории
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
         cat_mock = MagicMock()
         cat_mock.data = [
             {"id": "cat-1", "code": "beauty", "name": "Красота", "parent_id": None},
             {"id": "cat-3", "code": "travel", "name": "Путешествия", "parent_id": None},
         ]
-        mock_db.table.return_value.select.return_value.execute.return_value = cat_mock
+        mock_db.table.return_value.select.return_value.execute = AsyncMock(return_value=cat_mock)
 
         await match_categories(mock_db, "blog-1", insights)
 
@@ -1182,20 +1208,21 @@ class TestMatchCategories:
     @pytest.mark.asyncio
     async def test_primary_category_in_secondary_keeps_is_primary_true(self) -> None:
         """primary_categories[0] совпадает с элементом secondary_topics — is_primary=True сохраняется."""
-        from src.ai.taxonomy_matching import match_categories
+        from src.ai.taxonomy_matching import invalidate_taxonomy_cache, match_categories
 
+        invalidate_taxonomy_cache()
         insights = AIInsights()
         insights.content.primary_categories = ["beauty"]  # код категории
         # "beauty" как secondary должна быть пропущена (дублирует primary)
         insights.content.secondary_topics = ["beauty", "Путешествия"]
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
         cat_mock = MagicMock()
         cat_mock.data = [
             {"id": "cat-1", "code": "beauty", "name": "Красота", "parent_id": None},
             {"id": "cat-3", "code": "travel", "name": "Путешествия", "parent_id": None},
         ]
-        mock_db.table.return_value.select.return_value.execute.return_value = cat_mock
+        mock_db.table.return_value.select.return_value.execute = AsyncMock(return_value=cat_mock)
 
         await match_categories(mock_db, "blog-1", insights)
 
@@ -1228,7 +1255,7 @@ class TestMatchCategories:
             "макияж": "sub-1",       # name_lower → id
         }
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         await match_categories(mock_db, "blog-1", insights, categories=categories)
 
@@ -1250,19 +1277,20 @@ class TestMatchCategoriesEdge:
     @pytest.mark.asyncio
     async def test_category_with_none_name_skipped(self) -> None:
         """Категория с name=None в БД → не крашит dict comprehension."""
-        from src.ai.taxonomy_matching import match_categories
+        from src.ai.taxonomy_matching import invalidate_taxonomy_cache, match_categories
 
+        invalidate_taxonomy_cache()
         insights = AIInsights()
         insights.content.primary_categories = ["beauty"]  # код категории
         insights.content.secondary_topics = []
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
         cat_mock = MagicMock()
         cat_mock.data = [
             {"id": "cat-1", "code": "beauty", "name": "Красота", "parent_id": None},
             {"id": "cat-bad", "code": None, "name": None, "parent_id": None},
         ]
-        mock_db.table.return_value.select.return_value.execute.return_value = cat_mock
+        mock_db.table.return_value.select.return_value.execute = AsyncMock(return_value=cat_mock)
 
         await match_categories(mock_db, "blog-1", insights)
 
@@ -1277,7 +1305,7 @@ class TestMatchCategoriesEdge:
         insights = AIInsights()
         insights.content.primary_categories = []
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         await match_categories(mock_db, "blog-1", insights)
 
@@ -1286,15 +1314,16 @@ class TestMatchCategoriesEdge:
     @pytest.mark.asyncio
     async def test_empty_categories_table(self) -> None:
         """Таблица categories пуста → upsert не вызывается."""
-        from src.ai.taxonomy_matching import match_categories
+        from src.ai.taxonomy_matching import invalidate_taxonomy_cache, match_categories
 
+        invalidate_taxonomy_cache()
         insights = AIInsights()
         insights.content.primary_categories = ["beauty"]  # код категории
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
         cat_mock = MagicMock()
         cat_mock.data = []
-        mock_db.table.return_value.select.return_value.execute.return_value = cat_mock
+        mock_db.table.return_value.select.return_value.execute = AsyncMock(return_value=cat_mock)
 
         await match_categories(mock_db, "blog-1", insights)
 
@@ -1319,7 +1348,7 @@ class TestMatchTags:
             "фото-контент": "tag-4",
         }
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         stats = await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
@@ -1340,7 +1369,7 @@ class TestMatchTags:
 
         tags_cache = {"видео-контент": "tag-1"}
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
@@ -1355,7 +1384,7 @@ class TestMatchTags:
         insights = AIInsights()
         insights.tags = []
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
         await match_tags(mock_db, "blog-1", insights, tags={})
 
         mock_db.table.assert_not_called()
@@ -1363,16 +1392,17 @@ class TestMatchTags:
     @pytest.mark.asyncio
     async def test_loads_tags_from_db_when_cache_is_none(self) -> None:
         """Если tags=None — загрузить из БД."""
-        from src.ai.taxonomy_matching import match_tags
+        from src.ai.taxonomy_matching import invalidate_taxonomy_cache, match_tags
 
+        invalidate_taxonomy_cache()
         insights = AIInsights()
         insights.tags = ["видео-контент"]
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
         # load_tags query
         tags_mock = MagicMock()
         tags_mock.data = [{"id": "tag-1", "name": "видео-контент"}]
-        mock_db.table.return_value.select.return_value.execute.return_value = tags_mock
+        mock_db.table.return_value.select.return_value.execute = AsyncMock(return_value=tags_mock)
 
         await match_tags(mock_db, "blog-1", insights, tags=None)
 
@@ -1389,7 +1419,7 @@ class TestMatchTags:
 
         tags_cache = {"видео-контент": "tag-1"}
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
@@ -1442,7 +1472,7 @@ class TestMatchCategoriesLogging:
 
         categories_cache = {"beauty": "cat-1", "fashion": "cat-2"}
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         with patch("src.ai.taxonomy_matching.logger") as mock_logger:
             await match_categories(mock_db, "blog-1", insights, categories=categories_cache)
@@ -1465,7 +1495,7 @@ class TestMatchCategoriesLogging:
 
         categories_cache = {"beauty": "cat-1", "fashion": "cat-2"}
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         with patch("src.ai.taxonomy_matching.logger") as mock_logger:
             await match_categories(mock_db, "blog-1", insights, categories=categories_cache)
@@ -1488,7 +1518,7 @@ class TestMatchCategoriesLogging:
 
         categories_cache = {"beauty": "cat-1", "fashion": "cat-2"}
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         with patch("src.ai.taxonomy_matching.logger") as mock_logger:
             await match_categories(mock_db, "blog-1", insights, categories=categories_cache)
@@ -1511,7 +1541,7 @@ class TestMatchTagsLogging:
 
         tags_cache = {"видео-контент": "tag-1"}
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         with patch("src.ai.taxonomy_matching.logger") as mock_logger:
             await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
@@ -1533,7 +1563,7 @@ class TestMatchTagsLogging:
 
         tags_cache = {"видео-контент": "tag-1", "reels": "tag-2"}
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         with patch("src.ai.taxonomy_matching.logger") as mock_logger:
             await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
@@ -1552,7 +1582,7 @@ class TestMatchTagsLogging:
 
         tags_cache = {"видео-контент": "tag-1"}
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         with patch("src.ai.taxonomy_matching.logger") as mock_logger:
             await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
@@ -1611,7 +1641,7 @@ class TestMatchCategoriesFuzzy:
         insights = AIInsights()
         insights.content.primary_categories = ["beauty & makeup"]
 
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
         categories = {"beauty makeup": "cat-1"}
 
         await match_categories(mock_db, "blog-1", insights, categories=categories)
@@ -1628,7 +1658,7 @@ class TestMatchCategoriesFuzzy:
         insights.tags = ["видео контент"]  # пробел вместо дефиса
 
         tags_cache = {"видео-контент": "tag-1"}
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
@@ -1647,7 +1677,7 @@ class TestMatchTagsENtoRU:
         insights.tags = ["video-content"]
 
         tags_cache = {"видео-контент": "tag-1"}
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
@@ -1664,7 +1694,7 @@ class TestMatchTagsENtoRU:
         insights.tags = ["Video-Content"]
 
         tags_cache = {"видео-контент": "tag-1"}
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
@@ -1681,7 +1711,7 @@ class TestMatchTagsENtoRU:
         insights.tags = ["unknown-english-tag"]
 
         tags_cache = {"видео-контент": "tag-1"}
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         with patch("src.ai.taxonomy_matching.logger") as mock_logger:
             await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
@@ -1697,7 +1727,7 @@ class TestMatchTagsENtoRU:
         insights.tags = ["юмор"]
 
         tags_cache = {"юмор": "tag-1"}
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
@@ -1714,7 +1744,7 @@ class TestMatchTagsENtoRU:
         insights.tags = ["video-контент"]
 
         tags_cache = {"видео-контент": "tag-1"}
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         await match_tags(mock_db, "blog-1", insights, tags=tags_cache)
 
@@ -1774,7 +1804,7 @@ class TestCityAliases:
         from src.ai.taxonomy_matching import match_city
 
         cities_cache = {"алматы": "city-1"}
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         result = await match_city(mock_db, "blog-1", "Алмата", cities_cache)
 
@@ -1786,7 +1816,7 @@ class TestCityAliases:
         from src.ai.taxonomy_matching import match_city
 
         cities_cache = {"алматы": "city-1"}
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         result = await match_city(mock_db, "blog-1", "Алма-Ата", cities_cache)
 
@@ -1798,7 +1828,7 @@ class TestCityAliases:
         from src.ai.taxonomy_matching import match_city
 
         cities_cache = {"алматы": "city-1"}
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         result = await match_city(mock_db, "blog-1", "Алматы", cities_cache)
 
@@ -1814,7 +1844,7 @@ class TestMatchCityWithAliases:
         from src.ai.taxonomy_matching import match_city
 
         cities_cache = {"алматы": "city-almaty"}
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         result = await match_city(mock_db, "blog-1", "Алмата", cities_cache)
 
@@ -1833,7 +1863,7 @@ class TestMatchCityWithAliases:
         from src.ai.taxonomy_matching import match_city
 
         cities_cache = {"алматы": "city-1"}
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         result = await match_city(mock_db, "blog-1", "Москва", cities_cache)
 
@@ -1846,7 +1876,7 @@ class TestMatchCityWithAliases:
         from src.ai.taxonomy_matching import match_city
 
         cities_cache = {"актобе": "city-aktobe"}
-        mock_db = MagicMock()
+        mock_db = _mock_taxonomy_db()
 
         result = await match_city(mock_db, "blog-1", "Актюбинск", cities_cache)
 

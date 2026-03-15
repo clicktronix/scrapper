@@ -1,11 +1,12 @@
-"""Тесты CRUD-операций с Supabase."""
+"""Тесты CRUD-операций с Supabase (AsyncClient)."""
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 
 def _mock_supabase():
-    """Создать мок Supabase client с цепочкой вызовов."""
+    """Создать мок Supabase AsyncClient с цепочкой вызовов.
+
+    execute() — AsyncMock, т.к. AsyncClient возвращает coroutine.
+    """
     db = MagicMock()
     # table().update().eq().execute() цепочка
     table_mock = MagicMock()
@@ -14,6 +15,7 @@ def _mock_supabase():
     table_mock.insert.return_value = table_mock
     table_mock.upsert.return_value = table_mock
     table_mock.select.return_value = table_mock
+    table_mock.delete.return_value = table_mock
     table_mock.eq.return_value = table_mock
     table_mock.in_.return_value = table_mock
     table_mock.is_.return_value = table_mock
@@ -23,47 +25,12 @@ def _mock_supabase():
     table_mock.or_.return_value = table_mock
     table_mock.order.return_value = table_mock
     table_mock.limit.return_value = table_mock
-    table_mock.execute.return_value = MagicMock(data=[])
+    table_mock.execute = AsyncMock(return_value=MagicMock(data=[]))
     # rpc цепочка
     rpc_mock = MagicMock()
     db.rpc.return_value = rpc_mock
-    rpc_mock.execute.return_value = MagicMock(data=[])
+    rpc_mock.execute = AsyncMock(return_value=MagicMock(data=[]))
     return db
-
-
-class TestRunInThread:
-    """Тесты retry-поведения run_in_thread."""
-
-    async def test_no_retry_by_default(self) -> None:
-        """Без retry_transient ошибка пробрасывается сразу."""
-        from src.database import run_in_thread
-
-        transient_error = OSError(35, "Resource temporarily unavailable")
-        with patch("src.database.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-            mock_to_thread.side_effect = [transient_error, "ok"]
-
-            with pytest.raises(OSError):
-                await run_in_thread(lambda: "noop")
-
-            assert mock_to_thread.call_count == 1
-
-    async def test_retry_transient_enabled_retries(self) -> None:
-        """retry_transient=True ретраит транзиентные ошибки."""
-        from src.database import run_in_thread
-
-        transient_error = OSError(35, "Resource temporarily unavailable")
-        with patch("src.database.asyncio.to_thread", new_callable=AsyncMock) as mock_to_thread:
-            mock_to_thread.side_effect = [transient_error, "ok"]
-            result = await run_in_thread(lambda: "noop", retry_transient=True)
-
-            assert result == "ok"
-            assert mock_to_thread.call_count == 2
-
-    def test_transient_network_error_linux_errno_11(self) -> None:
-        """Linux errno=11 (EAGAIN) должен считаться транзиентным."""
-        from src.utils import is_transient_network_error
-
-        assert is_transient_network_error(OSError(11, "Resource temporarily unavailable"))
 
 
 class TestIsBlogFresh:
@@ -76,8 +43,8 @@ class TestIsBlogFresh:
         db = _mock_supabase()
         # Возвращаем данные — блог свежий
         chain = db.table.return_value.select.return_value.eq.return_value
-        chain.gt.return_value.limit.return_value.execute.return_value = MagicMock(
-            data=[{"scraped_at": "2026-02-01T00:00:00+00:00"}]
+        chain.gt.return_value.limit.return_value.execute = AsyncMock(
+            return_value=MagicMock(data=[{"scraped_at": "2026-02-01T00:00:00+00:00"}])
         )
 
         result = await is_blog_fresh(db, "blog-1", 60)
@@ -91,8 +58,8 @@ class TestIsBlogFresh:
         db = _mock_supabase()
         # Пустой результат — блог устаревший
         chain = db.table.return_value.select.return_value.eq.return_value
-        chain.gt.return_value.limit.return_value.execute.return_value = MagicMock(
-            data=[]
+        chain.gt.return_value.limit.return_value.execute = AsyncMock(
+            return_value=MagicMock(data=[])
         )
 
         result = await is_blog_fresh(db, "blog-1", 60)
@@ -105,8 +72,8 @@ class TestIsBlogFresh:
         db = _mock_supabase()
         # NULL scraped_at не проходит gt фильтр → пустой результат
         chain = db.table.return_value.select.return_value.eq.return_value
-        chain.gt.return_value.limit.return_value.execute.return_value = MagicMock(
-            data=[]
+        chain.gt.return_value.limit.return_value.execute = AsyncMock(
+            return_value=MagicMock(data=[])
         )
 
         result = await is_blog_fresh(db, "blog-new", 60)
@@ -219,7 +186,7 @@ class TestExtractRpcScalar:
         from src.database import mark_task_running
 
         db = _mock_supabase()
-        db.rpc.return_value.execute.return_value = MagicMock(data={})
+        db.rpc.return_value.execute = AsyncMock(return_value=MagicMock(data={}))
 
         result = await mark_task_running(db, "task-1")
         assert result is False
@@ -232,8 +199,8 @@ class TestMarkTaskRunning:
         from src.database import mark_task_running
 
         db = _mock_supabase()
-        db.rpc.return_value.execute.return_value = MagicMock(
-            data={"mark_task_running": "task-123"}
+        db.rpc.return_value.execute = AsyncMock(
+            return_value=MagicMock(data={"mark_task_running": "task-123"})
         )
         result = await mark_task_running(db, "task-123")
 
@@ -249,7 +216,7 @@ class TestMarkTaskRunning:
         from src.database import mark_task_running
 
         db = _mock_supabase()
-        db.rpc.return_value.execute.return_value = MagicMock(data=None)
+        db.rpc.return_value.execute = AsyncMock(return_value=MagicMock(data=None))
 
         result = await mark_task_running(db, "task-123")
         assert result is False
@@ -314,7 +281,7 @@ class TestCreateTaskIfNotExists:
         db = _mock_supabase()
         # RPC возвращает UUID новой задачи
         rpc_mock = db.rpc.return_value
-        rpc_mock.execute.return_value = MagicMock(data="new-task-uuid")
+        rpc_mock.execute = AsyncMock(return_value=MagicMock(data="new-task-uuid"))
 
         result = await create_task_if_not_exists(db, "blog-1", "full_scrape", 5)
         assert result == "new-task-uuid"
@@ -333,7 +300,7 @@ class TestCreateTaskIfNotExists:
         db = _mock_supabase()
         # RPC возвращает None, когда дубликат уже есть
         rpc_mock = db.rpc.return_value
-        rpc_mock.execute.return_value = MagicMock(data=None)
+        rpc_mock.execute = AsyncMock(return_value=MagicMock(data=None))
 
         result = await create_task_if_not_exists(db, "blog-1", "full_scrape", 5)
         assert result is None
@@ -343,7 +310,7 @@ class TestCreateTaskIfNotExists:
 
         db = _mock_supabase()
         rpc_mock = db.rpc.return_value
-        rpc_mock.execute.return_value = MagicMock(data="discover-task-uuid")
+        rpc_mock.execute = AsyncMock(return_value=MagicMock(data="discover-task-uuid"))
 
         result = await create_task_if_not_exists(db, None, "discover", 10)
         assert result == "discover-task-uuid"
@@ -495,7 +462,7 @@ class TestCreateTaskIfNotExistsEdge:
         from src.database import create_task_if_not_exists
 
         db = _mock_supabase()
-        db.rpc.return_value.execute.return_value = MagicMock(data="task-uuid")
+        db.rpc.return_value.execute = AsyncMock(return_value=MagicMock(data="task-uuid"))
         payload = {"hashtag": "beauty", "min_followers": 1000}
 
         await create_task_if_not_exists(db, None, "discover", 10, payload=payload)
@@ -508,7 +475,7 @@ class TestCreateTaskIfNotExistsEdge:
         from src.database import create_task_if_not_exists
 
         db = _mock_supabase()
-        db.rpc.return_value.execute.return_value = MagicMock(data="task-uuid")
+        db.rpc.return_value.execute = AsyncMock(return_value=MagicMock(data="task-uuid"))
 
         await create_task_if_not_exists(db, "blog-1", "full_scrape", 5)
 
@@ -520,7 +487,7 @@ class TestCreateTaskIfNotExistsEdge:
         from src.database import create_task_if_not_exists
 
         db = _mock_supabase()
-        db.rpc.return_value.execute.return_value = MagicMock(data="")
+        db.rpc.return_value.execute = AsyncMock(return_value=MagicMock(data=""))
 
         result = await create_task_if_not_exists(db, "blog-1", "full_scrape", 5)
         assert result is None
@@ -532,13 +499,9 @@ class TestRecoverStuckTasks:
     async def test_no_stuck_tasks(self) -> None:
         from src.database import recover_stuck_tasks
 
-        db = MagicMock()
-        with patch("src.database.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.side_effect = [
-                MagicMock(data=[]),  # full_scrape/discover query
-                MagicMock(data=[]),  # ai_analysis query
-            ]
-            result = await recover_stuck_tasks(db)
+        db = _mock_supabase()
+        # execute возвращает пустые данные (по умолчанию в _mock_supabase)
+        result = await recover_stuck_tasks(db)
         assert result == 0
 
     async def test_recovers_pending(self) -> None:
@@ -546,15 +509,19 @@ class TestRecoverStuckTasks:
         from src.database import recover_stuck_tasks
 
         db = _mock_supabase()
-        with patch("src.database.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.side_effect = [
-                MagicMock(data=[
-                    {"id": "task-1", "task_type": "full_scrape", "attempts": 1, "max_attempts": 3},
-                ]),
-                MagicMock(data=[]),  # ai_analysis — пусто
-                MagicMock(data=[]),  # update
-            ]
-            result = await recover_stuck_tasks(db)
+        # Первый execute — full_scrape/discover запрос
+        # Второй execute — ai_analysis запрос (пусто)
+        # Третий execute — update задачи
+        execute_results = [
+            MagicMock(data=[
+                {"id": "task-1", "task_type": "full_scrape", "attempts": 1, "max_attempts": 3},
+            ]),
+            MagicMock(data=[]),
+            MagicMock(data=[]),
+        ]
+        db.table.return_value.execute = AsyncMock(side_effect=execute_results)
+
+        result = await recover_stuck_tasks(db)
         assert result == 1
 
         # Проверяем, что update вызван со status=pending
@@ -567,15 +534,16 @@ class TestRecoverStuckTasks:
         from src.database import recover_stuck_tasks
 
         db = _mock_supabase()
-        with patch("src.database.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.side_effect = [
-                MagicMock(data=[
-                    {"id": "task-2", "task_type": "discover", "attempts": 3, "max_attempts": 3},
-                ]),
-                MagicMock(data=[]),  # ai_analysis — пусто
-                MagicMock(data=[]),  # update
-            ]
-            result = await recover_stuck_tasks(db)
+        execute_results = [
+            MagicMock(data=[
+                {"id": "task-2", "task_type": "discover", "attempts": 3, "max_attempts": 3},
+            ]),
+            MagicMock(data=[]),
+            MagicMock(data=[]),
+        ]
+        db.table.return_value.execute = AsyncMock(side_effect=execute_results)
+
+        result = await recover_stuck_tasks(db)
         assert result == 0  # не считается как recovered
 
         update_args = db.table.return_value.update.call_args[0][0]
@@ -587,17 +555,18 @@ class TestRecoverStuckTasks:
         from src.database import recover_stuck_tasks
 
         db = _mock_supabase()
-        with patch("src.database.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.side_effect = [
-                MagicMock(data=[
-                    {"id": "task-1", "task_type": "full_scrape", "attempts": 1, "max_attempts": 3},
-                    {"id": "task-2", "task_type": "discover", "attempts": 3, "max_attempts": 3},
-                ]),
-                MagicMock(data=[]),  # ai_analysis — пусто
-                MagicMock(data=[]),  # update task-1
-                MagicMock(data=[]),  # update task-2
-            ]
-            result = await recover_stuck_tasks(db)
+        execute_results = [
+            MagicMock(data=[
+                {"id": "task-1", "task_type": "full_scrape", "attempts": 1, "max_attempts": 3},
+                {"id": "task-2", "task_type": "discover", "attempts": 3, "max_attempts": 3},
+            ]),
+            MagicMock(data=[]),
+            MagicMock(data=[]),  # update task-1
+            MagicMock(data=[]),  # update task-2
+        ]
+        db.table.return_value.execute = AsyncMock(side_effect=execute_results)
+
+        result = await recover_stuck_tasks(db)
         assert result == 1  # только task-1 recovered
 
     async def test_recovers_ai_analysis_tasks(self) -> None:
@@ -605,15 +574,16 @@ class TestRecoverStuckTasks:
         from src.database import recover_stuck_tasks
 
         db = _mock_supabase()
-        with patch("src.database.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.side_effect = [
-                MagicMock(data=[]),  # full_scrape/discover — пусто
-                MagicMock(data=[
-                    {"id": "ai-1", "task_type": "ai_analysis", "attempts": 1, "max_attempts": 3},
-                ]),
-                MagicMock(data=[]),  # update
-            ]
-            result = await recover_stuck_tasks(db)
+        execute_results = [
+            MagicMock(data=[]),  # full_scrape/discover — пусто
+            MagicMock(data=[
+                {"id": "ai-1", "task_type": "ai_analysis", "attempts": 1, "max_attempts": 3},
+            ]),
+            MagicMock(data=[]),  # update
+        ]
+        db.table.return_value.execute = AsyncMock(side_effect=execute_results)
+
+        result = await recover_stuck_tasks(db)
         assert result == 1
 
         update_args = db.table.return_value.update.call_args[0][0]
@@ -625,15 +595,16 @@ class TestRecoverStuckTasks:
         from src.database import recover_stuck_tasks
 
         db = _mock_supabase()
-        with patch("src.database.run_in_thread", new_callable=AsyncMock) as mock_run:
-            mock_run.side_effect = [
-                MagicMock(data=[]),  # full_scrape/discover — пусто
-                MagicMock(data=[
-                    {"id": "ai-2", "task_type": "ai_analysis", "attempts": 3, "max_attempts": 3},
-                ]),
-                MagicMock(data=[]),  # update
-            ]
-            result = await recover_stuck_tasks(db)
+        execute_results = [
+            MagicMock(data=[]),  # full_scrape/discover — пусто
+            MagicMock(data=[
+                {"id": "ai-2", "task_type": "ai_analysis", "attempts": 3, "max_attempts": 3},
+            ]),
+            MagicMock(data=[]),  # update
+        ]
+        db.table.return_value.execute = AsyncMock(side_effect=execute_results)
+
+        result = await recover_stuck_tasks(db)
         assert result == 0
 
         update_args = db.table.return_value.update.call_args[0][0]
@@ -651,8 +622,8 @@ class TestFetchPendingTasks:
         tasks = [{"id": "t1", "status": "pending", "priority": 5}]
         chain = db.table.return_value.select.return_value.eq.return_value
         or_chain = chain.or_.return_value.order.return_value.order.return_value
-        or_chain.limit.return_value.execute.return_value = MagicMock(
-            data=tasks
+        or_chain.limit.return_value.execute = AsyncMock(
+            return_value=MagicMock(data=tasks)
         )
 
         result = await fetch_pending_tasks(db, limit=10)
@@ -664,8 +635,8 @@ class TestFetchPendingTasks:
         db = _mock_supabase()
         chain = db.table.return_value.select.return_value.eq.return_value
         or_chain = chain.or_.return_value.order.return_value.order.return_value
-        or_chain.limit.return_value.execute.return_value = MagicMock(
-            data=[]
+        or_chain.limit.return_value.execute = AsyncMock(
+            return_value=MagicMock(data=[])
         )
 
         result = await fetch_pending_tasks(db)
@@ -677,8 +648,8 @@ class TestFetchPendingTasks:
         db = _mock_supabase()
         chain = db.table.return_value.select.return_value.eq.return_value
         or_chain = chain.or_.return_value.order.return_value.order.return_value
-        or_chain.limit.return_value.execute.return_value = MagicMock(
-            data=[]
+        or_chain.limit.return_value.execute = AsyncMock(
+            return_value=MagicMock(data=[])
         )
 
         await fetch_pending_tasks(db, limit=5)
@@ -811,7 +782,7 @@ class TestCleanupOrphanPerson:
         db = _mock_supabase()
         # select возвращает пустой результат (нет блогов)
         chain = db.table.return_value.select.return_value.eq.return_value
-        chain.limit.return_value.execute.return_value = MagicMock(data=[])
+        chain.limit.return_value.execute = AsyncMock(return_value=MagicMock(data=[]))
 
         await cleanup_orphan_person(db, "person-123")
 
@@ -824,8 +795,8 @@ class TestCleanupOrphanPerson:
 
         db = _mock_supabase()
         chain = db.table.return_value.select.return_value.eq.return_value
-        chain.limit.return_value.execute.return_value = MagicMock(
-            data=[{"id": "blog-1"}]
+        chain.limit.return_value.execute = AsyncMock(
+            return_value=MagicMock(data=[{"id": "blog-1"}])
         )
 
         await cleanup_orphan_person(db, "person-123")
@@ -838,11 +809,13 @@ class TestCleanupOrphanPerson:
         from src.database import cleanup_orphan_person
 
         db = _mock_supabase()
+        # Первый execute (select) бросает ошибку
+        db.table.return_value.execute = AsyncMock(side_effect=RuntimeError("DB error"))
+        # Также настраиваем execute в цепочке select
+        chain = db.table.return_value.select.return_value.eq.return_value
+        chain.limit.return_value.execute = AsyncMock(side_effect=RuntimeError("DB error"))
 
-        with (
-            patch("src.database.run_in_thread", new_callable=AsyncMock, side_effect=RuntimeError("DB error")),
-            patch("src.database.logger") as mock_logger,
-        ):
+        with patch("src.database.logger") as mock_logger:
             # Не должна пробрасывать исключение
             await cleanup_orphan_person(db, "person-456")
 

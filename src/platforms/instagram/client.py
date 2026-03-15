@@ -21,7 +21,7 @@ from instagrapi.exceptions import (
 )
 from loguru import logger
 from pydantic import SecretStr
-from supabase import Client as SupabaseClient
+from supabase import AsyncClient as SupabaseClient
 
 from src.config import Settings
 from src.database import sanitize_error
