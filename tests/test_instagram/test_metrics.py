@@ -359,6 +359,76 @@ class TestExtractMentionsTrailingDot:
         assert result == ["@a.b.c"]
 
 
+class TestDetectLikesHidden:
+    """Тесты детекции скрытых лайков."""
+
+    def test_flag_from_api(self) -> None:
+        """like_and_view_counts_disabled=True → скрыты."""
+        from src.platforms.instagram.metrics import detect_likes_hidden
+
+        raw_medias = [{"like_and_view_counts_disabled": True, "like_count": 3}]
+        posts = [_make_post(3, 10, 1)]
+        assert detect_likes_hidden(raw_medias, posts, follower_count=100_000) is True
+
+    def test_heuristic_large_account_low_likes(self) -> None:
+        """50K+ подписчиков и avg_likes/followers < 0.001 → скрыты."""
+        from src.platforms.instagram.metrics import detect_likes_hidden
+
+        raw_medias = [{"like_count": 3}, {"like_count": 3}]
+        posts = [_make_post(3, 10, 1), _make_post(3, 5, 2)]
+        assert detect_likes_hidden(raw_medias, posts, follower_count=1_000_000) is True
+
+    def test_small_account_low_likes_not_hidden(self) -> None:
+        """< 50K подписчиков с низкими лайками → не скрыты (может быть реальный низкий ER)."""
+        from src.platforms.instagram.metrics import detect_likes_hidden
+
+        raw_medias = [{"like_count": 3}]
+        posts = [_make_post(3, 0, 1)]
+        assert detect_likes_hidden(raw_medias, posts, follower_count=10_000) is False
+
+    def test_large_account_normal_likes(self) -> None:
+        """50K+ подписчиков с нормальными лайками → не скрыты."""
+        from src.platforms.instagram.metrics import detect_likes_hidden
+
+        raw_medias = [{"like_count": 5000}]
+        posts = [_make_post(5000, 100, 1)]
+        assert detect_likes_hidden(raw_medias, posts, follower_count=100_000) is False
+
+    def test_majority_placeholder_mixed_posts(self) -> None:
+        """50K+ подписчиков, > половины постов с like_count<=3 → скрыты (частично скрытые лайки)."""
+        from src.platforms.instagram.metrics import detect_likes_hidden
+
+        raw_medias = [{"like_count": 3}] * 8 + [{"like_count": 50000}] * 4
+        posts = [_make_post(3, 80, i) for i in range(8)] + [
+            _make_post(50000, 500, i) for i in range(8, 12)
+        ]
+        assert detect_likes_hidden(raw_medias, posts, follower_count=3_000_000) is True
+
+    def test_minority_placeholder_not_hidden(self) -> None:
+        """50K+ подписчиков, < половины постов с like_count<=3 → не скрыты."""
+        from src.platforms.instagram.metrics import detect_likes_hidden
+
+        raw_medias = [{"like_count": 3}] * 2 + [{"like_count": 5000}] * 10
+        posts = [_make_post(3, 10, i) for i in range(2)] + [
+            _make_post(5000, 100, i) for i in range(2, 12)
+        ]
+        assert detect_likes_hidden(raw_medias, posts, follower_count=100_000) is False
+
+    def test_no_flag_no_heuristic(self) -> None:
+        """Нет флага, нормальный ER → не скрыты."""
+        from src.platforms.instagram.metrics import detect_likes_hidden
+
+        raw_medias = [{"like_count": 1000}]
+        posts = [_make_post(1000, 50, 1)]
+        assert detect_likes_hidden(raw_medias, posts, follower_count=50_000) is False
+
+    def test_empty_posts(self) -> None:
+        """Нет постов → не скрыты (нечего анализировать)."""
+        from src.platforms.instagram.metrics import detect_likes_hidden
+
+        assert detect_likes_hidden([], [], follower_count=100_000) is False
+
+
 class TestCalculatePostsPerWeekEdge:
     """Дополнительные тесты частоты публикаций."""
 

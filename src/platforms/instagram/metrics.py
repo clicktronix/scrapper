@@ -1,9 +1,48 @@
 """Расчёт метрик Instagram-профиля: ER, тренд, частота публикаций."""
 import re
 import statistics
+from typing import Any
 
 from src.models.blog import ScrapedPost
 from src.models.db_types import ErTrend
+
+# HikerAPI возвращает like_count=3 как placeholder для скрытых лайков
+_HIDDEN_LIKES_PLACEHOLDER = 3
+_HIDDEN_LIKES_MIN_FOLLOWERS = 50_000
+_HIDDEN_LIKES_ER_THRESHOLD = 0.001  # avg_likes / followers < 0.1%
+
+
+def detect_likes_hidden(
+    raw_medias: list[dict[str, Any]],
+    posts: list[ScrapedPost],
+    follower_count: int,
+) -> bool:
+    """Определить, скрыты ли лайки у аккаунта.
+
+    1) Проверяем флаг like_and_view_counts_disabled из HikerAPI.
+    2) Эвристика для крупных аккаунтов (50K+):
+       a) avg_likes / followers < 0.1% — невозможно для живого аккаунта
+       b) > половины постов с like_count <= 3 — placeholder от HikerAPI
+    """
+    # Явный флаг от API
+    if any(m.get("like_and_view_counts_disabled") for m in raw_medias):
+        return True
+
+    if follower_count >= _HIDDEN_LIKES_MIN_FOLLOWERS and posts:
+        # Эвристика 1: слишком низкий средний ER
+        avg_likes = sum(p.like_count for p in posts) / len(posts)
+        if avg_likes / follower_count < _HIDDEN_LIKES_ER_THRESHOLD:
+            return True
+
+        # Эвристика 2: большинство постов с placeholder like_count=3
+        # (часть постов может иметь реальные лайки, если автор скрывает лайки не на всех)
+        placeholder_count = sum(
+            1 for p in posts if p.like_count <= _HIDDEN_LIKES_PLACEHOLDER
+        )
+        if placeholder_count > len(posts) / 2:
+            return True
+
+    return False
 
 
 def calculate_er(posts: list[ScrapedPost], follower_count: int) -> float | None:

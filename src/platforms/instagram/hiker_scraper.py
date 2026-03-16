@@ -27,6 +27,7 @@ from src.platforms.instagram.metrics import (
     calculate_er,
     calculate_er_trend,
     calculate_posts_per_week,
+    detect_likes_hidden,
     extract_hashtags,
     extract_mentions,
     select_posts_for_comments,
@@ -381,6 +382,12 @@ class HikerInstagramScraper:
 
         # Вычислить engagement_rate для всех медиа
         follower_count: int = int(user.get("follower_count") or 0)
+
+        # Детекция скрытых лайков (HikerAPI возвращает like_count=3 как placeholder)
+        likes_hidden = detect_likes_hidden(raw_medias, medias_mapped, follower_count)
+        if likes_hidden:
+            logger.info(f"[HikerAPI] @{username}: лайки скрыты, ER будет NULL")
+
         assign_engagement_rates(medias_mapped, follower_count)
 
         # Bio links
@@ -439,10 +446,11 @@ class HikerInstagramScraper:
             profile_pic_url=str(profile_pic_url_val) if profile_pic_url_val is not None else None,
             medias=medias_mapped,
             highlights=highlights,
-            avg_er=calculate_er(medias_mapped, follower_count),
-            avg_er_reels=calculate_er(reels_for_er, follower_count),
-            er_trend=calculate_er_trend(medias_mapped, follower_count),
+            avg_er=None if likes_hidden else calculate_er(medias_mapped, follower_count),
+            avg_er_reels=None if likes_hidden else calculate_er(reels_for_er, follower_count),
+            er_trend=None if likes_hidden else calculate_er_trend(medias_mapped, follower_count),
             posts_per_week=calculate_posts_per_week(medias_mapped),
+            likes_hidden=likes_hidden,
         )
 
         logger.info(

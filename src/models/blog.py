@@ -114,3 +114,4 @@ class ScrapedProfile(BaseModel):
     avg_er_reels: float | None = None
     er_trend: Literal["growing", "stable", "declining"] | None = None
     posts_per_week: float | None = None
+    likes_hidden: bool = False  # Лайки скрыты → ER недоступен

@@ -166,14 +166,16 @@ async def handle_full_scrape(
         profile = await scraper.scrape_profile(username)
     except PrivateAccountError:
         await db.table("blogs").update(
-            {"scrape_status": "private", "needs_review": True}
+            {"scrape_status": "private", "needs_review": True,
+             "review_reason": "Приватный аккаунт"}
         ).eq("id", blog_id).execute()
         await _h.mark_task_done(db, task_id)
         return
     except UserNotFound:
         # Пользователь удалён / не найден — без retry, нужна ручная проверка
         await db.table("blogs").update(
-            {"scrape_status": "deleted", "needs_review": True}
+            {"scrape_status": "deleted", "needs_review": True,
+             "review_reason": "Аккаунт не найден (удалён или переименован)"}
         ).eq("id", blog_id).execute()
         await _h.mark_task_done(db, task_id)
         return
@@ -191,6 +193,7 @@ async def handle_full_scrape(
         }
         if not retry:
             update_data["needs_review"] = True
+            update_data["review_reason"] = f"HikerAPI ошибка HTTP {e.status_code}"
             update_data["scrape_error"] = str(e)[:1000]
         await db.table("blogs").update(update_data).eq("id", blog_id).execute()
         await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
@@ -214,6 +217,7 @@ async def handle_full_scrape(
         await db.table("blogs").update({
             "scrape_status": "pending",
             "needs_review": True,
+            "review_reason": f"Неожиданная ошибка: {type(e).__name__}",
             "scrape_error": _h.sanitize_error(str(e))[:1000],
         }).eq("id", blog_id).execute()
         await _h.mark_task_failed(db, task_id, current_attempts, task["max_attempts"],
@@ -233,6 +237,9 @@ async def handle_full_scrape(
                  f"{len(profile.highlights)} highlights, "
                  f"followers={profile.follower_count}")
     blog_data = _build_blog_data(profile, avg_reels_views)
+    if profile.likes_hidden:
+        blog_data["needs_review"] = True
+        blog_data["review_reason"] = "Лайки скрыты — ER недоступен"
     # avatar_url записываем только после успешной загрузки в Storage (ниже)
 
     # Upsert посты и хайлайты (mode="json" для корректной сериализации datetime)
