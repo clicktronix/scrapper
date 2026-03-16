@@ -137,6 +137,9 @@ class Settings(BaseSettings):
     backfill_ai_batch_size: int = 50
     backfill_ai_interval_minutes: int = 60
 
+    # Throttle: пауза backfill при перегрузке AI-очереди
+    ai_queue_pause_threshold: int = 500
+
     # HikerAPI (альтернативный бэкенд)
     hikerapi_token: SecretStr = SecretStr("")
     scraper_backend: Literal["instagrapi", "hikerapi"] = "instagrapi"

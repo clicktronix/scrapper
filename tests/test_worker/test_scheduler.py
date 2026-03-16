@@ -679,6 +679,7 @@ class TestBackfillScrape:
 
         settings = MagicMock()
         settings.backfill_scrape_batch_size = 80
+        settings.ai_queue_pause_threshold = 500
 
         db = make_db_mock()
         rpc_result = MagicMock()
@@ -688,6 +689,7 @@ class TestBackfillScrape:
         db.rpc.return_value = rpc_mock
 
         with (
+            patch("src.worker.scheduler.count_running_ai_tasks", new_callable=AsyncMock, return_value=100),
             patch("src.worker.scheduler.has_recent_balance_errors", new_callable=AsyncMock, return_value=False),
             patch(
                 "src.worker.scheduler.create_task_if_not_exists",
@@ -707,6 +709,7 @@ class TestBackfillScrape:
 
         settings = MagicMock()
         settings.backfill_scrape_batch_size = 80
+        settings.ai_queue_pause_threshold = 500
 
         db = make_db_mock()
         rpc_result = MagicMock()
@@ -716,6 +719,7 @@ class TestBackfillScrape:
         db.rpc.return_value = rpc_mock
 
         with (
+            patch("src.worker.scheduler.count_running_ai_tasks", new_callable=AsyncMock, return_value=0),
             patch("src.worker.scheduler.has_recent_balance_errors", new_callable=AsyncMock, return_value=False),
             patch("src.worker.scheduler.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
         ):
@@ -728,15 +732,38 @@ class TestBackfillScrape:
 
         settings = MagicMock()
         settings.backfill_scrape_batch_size = 80
+        settings.ai_queue_pause_threshold = 500
 
         db = make_db_mock()
 
         with (
+            patch("src.worker.scheduler.count_running_ai_tasks", new_callable=AsyncMock, return_value=0),
             patch("src.worker.scheduler.has_recent_balance_errors", new_callable=AsyncMock, return_value=True),
             patch("src.worker.scheduler.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
         ):
             await backfill_scrape(db=db, settings=settings)
             mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_on_ai_queue_overload(self) -> None:
+        """Пропуск backfill_scrape при перегрузке AI-очереди."""
+        from src.worker.scheduler import backfill_scrape
+
+        settings = MagicMock()
+        settings.backfill_scrape_batch_size = 80
+        settings.ai_queue_pause_threshold = 500
+
+        db = make_db_mock()
+
+        with (
+            patch("src.worker.scheduler.count_running_ai_tasks", new_callable=AsyncMock, return_value=600),
+            patch("src.worker.scheduler.has_recent_balance_errors", new_callable=AsyncMock) as mock_balance,
+            patch("src.worker.scheduler.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
+        ):
+            await backfill_scrape(db=db, settings=settings)
+            mock_create.assert_not_called()
+            # has_recent_balance_errors не вызывается — ранний return
+            mock_balance.assert_not_called()
 
 
 class TestBackfillAiAnalysis:
@@ -748,6 +775,7 @@ class TestBackfillAiAnalysis:
 
         settings = MagicMock()
         settings.backfill_ai_batch_size = 50
+        settings.ai_queue_pause_threshold = 500
 
         db = make_db_mock()
         rpc_result = MagicMock()
@@ -757,6 +785,7 @@ class TestBackfillAiAnalysis:
         db.rpc.return_value = rpc_mock
 
         with (
+            patch("src.worker.scheduler.count_running_ai_tasks", new_callable=AsyncMock, return_value=100),
             patch("src.worker.scheduler.has_recent_balance_errors", new_callable=AsyncMock, return_value=False),
             patch(
                 "src.worker.scheduler.create_task_if_not_exists",
@@ -775,6 +804,7 @@ class TestBackfillAiAnalysis:
 
         settings = MagicMock()
         settings.backfill_ai_batch_size = 50
+        settings.ai_queue_pause_threshold = 500
 
         db = make_db_mock()
         rpc_result = MagicMock()
@@ -784,6 +814,7 @@ class TestBackfillAiAnalysis:
         db.rpc.return_value = rpc_mock
 
         with (
+            patch("src.worker.scheduler.count_running_ai_tasks", new_callable=AsyncMock, return_value=0),
             patch("src.worker.scheduler.has_recent_balance_errors", new_callable=AsyncMock, return_value=False),
             patch("src.worker.scheduler.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
         ):
@@ -796,10 +827,12 @@ class TestBackfillAiAnalysis:
 
         settings = MagicMock()
         settings.backfill_ai_batch_size = 50
+        settings.ai_queue_pause_threshold = 500
 
         db = make_db_mock()
 
         with (
+            patch("src.worker.scheduler.count_running_ai_tasks", new_callable=AsyncMock, return_value=0),
             patch(
                 "src.worker.scheduler.has_recent_balance_errors",
                 new_callable=AsyncMock,
@@ -817,10 +850,12 @@ class TestBackfillAiAnalysis:
 
         settings = MagicMock()
         settings.backfill_ai_batch_size = 50
+        settings.ai_queue_pause_threshold = 500
 
         db = make_db_mock()
 
         with (
+            patch("src.worker.scheduler.count_running_ai_tasks", new_callable=AsyncMock, return_value=0),
             patch(
                 "src.worker.scheduler.has_recent_balance_errors",
                 new_callable=AsyncMock,
@@ -834,3 +869,24 @@ class TestBackfillAiAnalysis:
         ):
             await backfill_ai_analysis(db=db, settings=settings)
             mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_on_ai_queue_overload(self) -> None:
+        """Пропуск backfill_ai при перегрузке AI-очереди."""
+        from src.worker.scheduler import backfill_ai_analysis
+
+        settings = MagicMock()
+        settings.backfill_ai_batch_size = 50
+        settings.ai_queue_pause_threshold = 500
+
+        db = make_db_mock()
+
+        with (
+            patch("src.worker.scheduler.count_running_ai_tasks", new_callable=AsyncMock, return_value=500),
+            patch("src.worker.scheduler.has_recent_balance_errors", new_callable=AsyncMock) as mock_balance,
+            patch("src.worker.scheduler.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
+        ):
+            await backfill_ai_analysis(db=db, settings=settings)
+            mock_create.assert_not_called()
+            # has_recent_balance_errors не вызывается — ранний return
+            mock_balance.assert_not_called()

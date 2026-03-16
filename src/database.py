@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from loguru import logger
+from postgrest.types import CountMethod
 from supabase import AsyncClient
 
 from src.models.db_types import TaskRecord
@@ -291,6 +292,19 @@ async def recover_stuck_tasks(
             types[tt] = types.get(tt, 0) + 1
         logger.warning(f"Recovered {recovered} stuck tasks ({types})")
     return recovered
+
+
+async def count_running_ai_tasks(db: AsyncClient) -> int:
+    """Количество running ai_analysis задач (для throttle backfill)."""
+    result = await (
+        db.table("scrape_tasks")
+        .select("id", count=CountMethod.exact)
+        .eq("task_type", "ai_analysis")
+        .eq("status", "running")
+        .limit(0)
+        .execute()
+    )
+    return result.count or 0
 
 
 async def cleanup_orphan_person(db: AsyncClient, person_id: str) -> None:

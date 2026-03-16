@@ -22,6 +22,7 @@ from src.ai.taxonomy_matching import (
 )
 from src.config import Settings
 from src.database import (
+    count_running_ai_tasks,
     create_task_if_not_exists,
     mark_task_failed,
     recover_stuck_tasks,
@@ -81,6 +82,15 @@ async def backfill_scrape(db: AsyncClient, settings: Settings) -> None:
     """Создать full_scrape задачи для pending блогов без скрапинга."""
     record_job_run("backfill_scrape")
 
+    # Throttle: каждый scrape создаёт ai_analysis задачу → не раздуваем AI-очередь
+    running_ai = await count_running_ai_tasks(db)
+    if running_ai >= settings.ai_queue_pause_threshold:
+        logger.warning(
+            f"[backfill_scrape] Пауза: AI-очередь перегружена "
+            f"({running_ai} running >= {settings.ai_queue_pause_threshold})"
+        )
+        return
+
     if await has_recent_balance_errors(db, "insufficient balance"):
         logger.warning("[backfill_scrape] Пропуск: недавние ошибки баланса HikerAPI")
         return
@@ -110,6 +120,15 @@ async def backfill_scrape(db: AsyncClient, settings: Settings) -> None:
 async def backfill_ai_analysis(db: AsyncClient, settings: Settings) -> None:
     """Создать ai_analysis задачи для блогов без insights."""
     record_job_run("backfill_ai_analysis")
+
+    # Throttle: не создаём новые AI-задачи при перегрузке очереди
+    running_ai = await count_running_ai_tasks(db)
+    if running_ai >= settings.ai_queue_pause_threshold:
+        logger.warning(
+            f"[backfill_ai] Пауза: AI-очередь перегружена "
+            f"({running_ai} running >= {settings.ai_queue_pause_threshold})"
+        )
+        return
 
     # Проверяем оба паттерна ошибок OpenAI
     if (
