@@ -96,18 +96,27 @@ def _truncate_tags(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _parse_ai_insights(content_text: str) -> AIInsights:
-    """Распарсить structured output с fallback для слегка шумных ответов."""
+    """Распарсить structured output с fallback для шумных ответов.
+
+    Стратегия:
+    1. Быстрый путь: model_validate_json (без модификаций).
+    2. Fallback: парсим JSON вручную → _truncate_tags → model_validate.
+       Если _cleanup_json_payload вернул None, пробуем оригинальный текст.
+    """
     # PostgreSQL не принимает \u0000 в text/jsonb полях
     content_text = _strip_null_bytes(content_text)
     try:
         return AIInsights.model_validate_json(content_text)
     except ValidationError as first_err:
-        cleaned = _cleanup_json_payload(content_text)
-        if cleaned is None:
-            raise
+        # Fallback: парсим JSON вручную, обрезаем tags, ревалидируем
+        json_text = _cleanup_json_payload(content_text) or content_text
         try:
-            parsed = json.loads(cleaned)
-            _truncate_tags(parsed)
+            parsed = json.loads(json_text)
+        except json.JSONDecodeError:
+            # Не удалось распарсить JSON — поднимаем оригинальную ValidationError
+            raise first_err from None
+        _truncate_tags(parsed)
+        try:
             return AIInsights.model_validate(parsed)
         except ValidationError as second_err:
             # Логируем детали: какие поля не прошли валидацию

@@ -1,10 +1,28 @@
 """Тесты конфигурации скрапера."""
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from pydantic import SecretStr
 
-from src.config import _parse_account_credentials, _split_comma
+from src.config import Settings, _parse_account_credentials, _split_comma
+
+
+def make_settings(**overrides: str) -> Settings:
+    """Фабрика реального Settings с дефолтными обязательными полями.
+
+    Все kwargs передаются как env-переменные (uppercase).
+    """
+    env = {
+        "SUPABASE_URL": "https://test.supabase.co",
+        "SUPABASE_SERVICE_KEY": "test-key",
+        "OPENAI_API_KEY": "sk-test",
+        "SCRAPER_API_KEY": "test-key",
+    }
+    env.update(overrides)
+    with patch.dict(os.environ, env, clear=False):
+        return Settings(_env_file=None)
 
 
 class TestSplitComma:
@@ -291,3 +309,38 @@ class TestAccountCredentialsParsing:
             totp_seed=SecretStr(""),
         )
         assert cred.has_totp_seed is False
+
+
+class TestBackfillSettings:
+    """Тесты backfill настроек."""
+
+    def test_backfill_scrape_defaults(self) -> None:
+        """Дефолтные значения backfill_scrape_*."""
+        settings = make_settings()
+        assert settings.backfill_scrape_enabled is True
+        assert settings.backfill_scrape_batch_size == 80
+        assert settings.backfill_scrape_interval_minutes == 30
+
+    def test_backfill_ai_defaults(self) -> None:
+        """Дефолтные значения backfill_ai_*."""
+        settings = make_settings()
+        assert settings.backfill_ai_enabled is True
+        assert settings.backfill_ai_batch_size == 50
+        assert settings.backfill_ai_interval_minutes == 60
+
+    def test_backfill_settings_override(self) -> None:
+        """Backfill настройки переопределяются через env."""
+        settings = make_settings(
+            BACKFILL_SCRAPE_ENABLED="false",
+            BACKFILL_SCRAPE_BATCH_SIZE="200",
+            BACKFILL_SCRAPE_INTERVAL_MINUTES="15",
+            BACKFILL_AI_ENABLED="false",
+            BACKFILL_AI_BATCH_SIZE="100",
+            BACKFILL_AI_INTERVAL_MINUTES="120",
+        )
+        assert settings.backfill_scrape_enabled is False
+        assert settings.backfill_scrape_batch_size == 200
+        assert settings.backfill_scrape_interval_minutes == 15
+        assert settings.backfill_ai_enabled is False
+        assert settings.backfill_ai_batch_size == 100
+        assert settings.backfill_ai_interval_minutes == 120

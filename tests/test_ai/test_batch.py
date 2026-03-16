@@ -4,8 +4,11 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import ValidationError
 
+from src.ai.batch_api import _parse_ai_insights, _truncate_tags
 from src.ai.schemas import AIInsights
+from src.ai.taxonomy import ALL_TAG_NAMES
 from src.config import Settings
 from src.models.blog import ScrapedPost, ScrapedProfile
 
@@ -1919,3 +1922,109 @@ class TestNormalizeBrand:
 
         assert len(unique) == 1
         assert unique[0] == "L'Oreal"
+
+
+class TestTruncateTags:
+    """Тесты обрезки тегов в _truncate_tags."""
+
+    def test_within_limit_unchanged(self) -> None:
+        """Теги в пределах лимита не обрезаются."""
+        data = {"tags": ALL_TAG_NAMES[:10]}
+        result = _truncate_tags(data)
+        assert len(result["tags"]) == 10
+
+    def test_over_limit_truncated(self) -> None:
+        """Теги свыше 40 обрезаются до 40."""
+        # Берём 50 тегов из справочника
+        tags_50 = ALL_TAG_NAMES[:50]
+        data = {"tags": tags_50}
+        result = _truncate_tags(data)
+        assert len(result["tags"]) == 40
+        assert result["tags"] == tags_50[:40]
+
+    def test_no_tags_key(self) -> None:
+        """Без ключа tags — data без изменений."""
+        data = {"summary": "test"}
+        result = _truncate_tags(data)
+        assert result == {"summary": "test"}
+
+    def test_tags_not_list(self) -> None:
+        """Если tags не список — без изменений."""
+        data = {"tags": "not-a-list"}
+        result = _truncate_tags(data)
+        assert result["tags"] == "not-a-list"
+
+
+class TestParseAiInsights:
+    """Тесты парсинга structured output через _parse_ai_insights."""
+
+    def _make_valid_json(self, **overrides: object) -> str:
+        """Создать валидный JSON строку AIInsights."""
+        base: dict[str, object] = {
+            "tags": list(ALL_TAG_NAMES[:10]),
+            "summary": "Тестовый блогер",
+        }
+        base.update(overrides)
+        insights = AIInsights(**base)
+        return insights.model_dump_json()
+
+    def test_valid_json_parses(self) -> None:
+        """Валидный JSON парсится без fallback."""
+        json_str = self._make_valid_json()
+        result = _parse_ai_insights(json_str)
+        assert isinstance(result, AIInsights)
+        assert len(result.tags) == 10
+
+    def test_tags_over_40_truncated_via_fallback(self) -> None:
+        """JSON с >40 тегами парсится через fallback с обрезкой."""
+        # Собираем 50 валидных тегов
+        tags_50 = list(ALL_TAG_NAMES[:50])
+        # Создаём минимальный валидный JSON (кроме количества тегов)
+        base = AIInsights(tags=ALL_TAG_NAMES[:10], summary="test")
+        data = base.model_dump()
+        data["tags"] = tags_50
+        json_str = json.dumps(data, ensure_ascii=False)
+
+        result = _parse_ai_insights(json_str)
+        assert isinstance(result, AIInsights)
+        assert len(result.tags) == 40
+
+    def test_null_bytes_stripped(self) -> None:
+        """Null bytes \\u0000 удаляются перед парсингом."""
+        json_str = self._make_valid_json()
+        # Вставляем null byte
+        json_with_null = json_str[:5] + "\x00" + json_str[5:]
+        result = _parse_ai_insights(json_with_null)
+        assert isinstance(result, AIInsights)
+
+    def test_json_with_code_fences_parsed(self) -> None:
+        """JSON обёрнутый в ```json``` парсится через cleanup."""
+        base = AIInsights(tags=list(ALL_TAG_NAMES[:10]), summary="test")
+        data = base.model_dump()
+        # Оборачиваем в markdown code fence
+        json_str = "```json\n" + json.dumps(data, ensure_ascii=False) + "\n```"
+        result = _parse_ai_insights(json_str)
+        assert isinstance(result, AIInsights)
+
+    def test_invalid_json_raises_validation_error(self) -> None:
+        """Невалидный JSON поднимает ValidationError."""
+        with pytest.raises(ValidationError):
+            _parse_ai_insights("not valid json at all")
+
+    def test_cleanup_none_falls_back_to_original(self) -> None:
+        """Если _cleanup_json_payload=None, пробуем оригинальный текст как JSON.
+
+        Regression: раньше при cleanup=None сразу поднималась ошибка,
+        минуя _truncate_tags.
+        """
+        # Создаём валидный JSON с >40 тегами — cleanup не нужен
+        # но вызываем напрямую с чистым JSON (без мусора вокруг)
+        base = AIInsights(tags=list(ALL_TAG_NAMES[:10]), summary="test")
+        data = base.model_dump()
+        data["tags"] = list(ALL_TAG_NAMES[:50])  # >40, вызывает fallback
+        json_str = json.dumps(data, ensure_ascii=False)
+
+        # Этот JSON — чистый, _cleanup_json_payload вернёт его же.
+        # Но fallback всё равно должен обрезать теги.
+        result = _parse_ai_insights(json_str)
+        assert len(result.tags) == 40

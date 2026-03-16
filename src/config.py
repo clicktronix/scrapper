@@ -127,6 +127,16 @@ class Settings(BaseSettings):
     # Фильтрация свежести
     rescrape_days: int = 60  # Минимальный интервал между скрапами (дни)
 
+    # Backfill: автоскрап pending блогов
+    backfill_scrape_enabled: bool = True
+    backfill_scrape_batch_size: int = 80
+    backfill_scrape_interval_minutes: int = 30
+
+    # Backfill: AI анализ для блогов без insights
+    backfill_ai_enabled: bool = True
+    backfill_ai_batch_size: int = 50
+    backfill_ai_interval_minutes: int = 60
+
     # HikerAPI (альтернативный бэкенд)
     hikerapi_token: SecretStr = SecretStr("")
     scraper_backend: Literal["instagrapi", "hikerapi"] = "instagrapi"

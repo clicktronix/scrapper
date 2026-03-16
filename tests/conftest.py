@@ -49,6 +49,7 @@ def make_db_mock() -> MagicMock:
     table_mock.not_.in_.return_value = table_mock
     table_mock.lt.return_value = table_mock
     table_mock.gt.return_value = table_mock
+    table_mock.like.return_value = table_mock
     table_mock.or_.return_value = table_mock
     table_mock.is_.return_value = table_mock
     table_mock.update.return_value = table_mock

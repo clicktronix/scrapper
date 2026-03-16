@@ -147,7 +147,10 @@ class TestRetryTask:
         builder = db.table.return_value
         # select failed -> update -> reselect pending
         builder.execute.side_effect = [
-            MagicMock(data=[{"id": TASK_UUID, "status": "failed"}]),
+            MagicMock(data=[{
+                "id": TASK_UUID, "status": "failed",
+                "task_type": "full_scrape", "blog_id": "blog-123",
+            }]),
             MagicMock(data=[]),
             MagicMock(data=[{"status": "pending"}]),
         ]

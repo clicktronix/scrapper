@@ -194,6 +194,8 @@ class TestCreateScheduler:
         mock_db = MagicMock()
         settings = MagicMock()
         settings.discovery_hashtags_list = ["test"]
+        settings.backfill_scrape_interval_minutes = 30
+        settings.backfill_ai_interval_minutes = 60
         mock_openai = MagicMock()
 
         scheduler = create_scheduler(mock_db, settings, mock_openai)
@@ -206,11 +208,31 @@ class TestCreateScheduler:
         assert "retry_taxonomy_mappings" in job_ids
         assert "audit_taxonomy_drift" in job_ids
         assert "cleanup_old_images" in job_ids
+        assert "backfill_scrape" in job_ids
+        assert "backfill_ai_analysis" in job_ids
+
+    def test_backfill_disabled_not_registered(self) -> None:
+        """Если backfill_*_enabled=False, задачи не регистрируются."""
+        from src.worker.scheduler import create_scheduler
+
+        mock_db = MagicMock()
+        settings = MagicMock()
+        settings.backfill_scrape_enabled = False
+        settings.backfill_ai_enabled = False
+
+        scheduler = create_scheduler(mock_db, settings, MagicMock())
+
+        job_ids = [job.id for job in scheduler.get_jobs()]
+        assert "backfill_scrape" not in job_ids
+        assert "backfill_ai_analysis" not in job_ids
+
     def test_no_poll_jobs_without_openai(self) -> None:
         from src.worker.scheduler import create_scheduler
 
         mock_db = MagicMock()
         settings = MagicMock()
+        settings.backfill_scrape_interval_minutes = 30
+        settings.backfill_ai_interval_minutes = 60
 
         scheduler = create_scheduler(mock_db, settings, openai_client=None)
 
@@ -221,6 +243,9 @@ class TestCreateScheduler:
         assert "retry_missing_embeddings" not in job_ids
         assert "retry_taxonomy_mappings" not in job_ids
         assert "audit_taxonomy_drift" not in job_ids
+        # Backfill задачи НЕ зависят от openai_client
+        assert "backfill_scrape" in job_ids
+        assert "backfill_ai_analysis" in job_ids
 
     def test_misfire_grace_time_is_none(self) -> None:
         """misfire_grace_time=None — job'ы не пропускаются при задержке."""
@@ -229,6 +254,8 @@ class TestCreateScheduler:
         mock_db = MagicMock()
         settings = MagicMock()
         settings.discovery_hashtags_list = []
+        settings.backfill_scrape_interval_minutes = 30
+        settings.backfill_ai_interval_minutes = 60
 
         scheduler = create_scheduler(mock_db, settings)
 
@@ -242,6 +269,8 @@ class TestCreateScheduler:
         mock_db = MagicMock()
         settings = MagicMock()
         settings.discovery_hashtags_list = []
+        settings.backfill_scrape_interval_minutes = 30
+        settings.backfill_ai_interval_minutes = 60
 
         scheduler = create_scheduler(mock_db, settings)
 
@@ -253,6 +282,8 @@ class TestCreateScheduler:
         mock_db = MagicMock()
         settings = MagicMock()
         settings.discovery_hashtags_list = []
+        settings.backfill_scrape_interval_minutes = 30
+        settings.backfill_ai_interval_minutes = 60
 
         scheduler = create_scheduler(mock_db, settings)
 
@@ -596,3 +627,210 @@ class TestAuditTaxonomyDrift:
         ):
             await audit_taxonomy_drift(mock_db)
             assert mock_logger.warning.call_count >= 1
+
+
+class TestHasRecentBalanceErrors:
+    """Тесты has_recent_balance_errors."""
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_errors_found(self) -> None:
+        from src.worker.scheduler import has_recent_balance_errors
+
+        db = make_db_mock()
+        result_mock = MagicMock()
+        result_mock.count = 1
+        result_mock.data = [{"id": "t1"}]
+        db.table.return_value.execute = AsyncMock(return_value=result_mock)
+
+        assert await has_recent_balance_errors(db, "insufficient balance") is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_no_errors(self) -> None:
+        from src.worker.scheduler import has_recent_balance_errors
+
+        db = make_db_mock()
+        result_mock = MagicMock()
+        result_mock.count = 0
+        result_mock.data = []
+        db.table.return_value.execute = AsyncMock(return_value=result_mock)
+
+        assert await has_recent_balance_errors(db, "insufficient balance") is False
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_count_is_none(self) -> None:
+        """Supabase может вернуть count=None — не должен падать."""
+        from src.worker.scheduler import has_recent_balance_errors
+
+        db = make_db_mock()
+        result_mock = MagicMock()
+        result_mock.count = None
+        result_mock.data = []
+        db.table.return_value.execute = AsyncMock(return_value=result_mock)
+
+        assert await has_recent_balance_errors(db, "insufficient balance") is False
+
+
+class TestBackfillScrape:
+    """Тесты backfill_scrape."""
+
+    @pytest.mark.asyncio
+    async def test_creates_tasks_for_pending_blogs(self) -> None:
+        from src.worker.scheduler import backfill_scrape
+
+        settings = MagicMock()
+        settings.backfill_scrape_batch_size = 80
+
+        db = make_db_mock()
+        rpc_result = MagicMock()
+        rpc_result.data = [{"id": "blog-1"}, {"id": "blog-2"}, {"id": "blog-3"}]
+        rpc_mock = MagicMock()
+        rpc_mock.execute = AsyncMock(return_value=rpc_result)
+        db.rpc.return_value = rpc_mock
+
+        with (
+            patch("src.worker.scheduler.has_recent_balance_errors", new_callable=AsyncMock, return_value=False),
+            patch(
+                "src.worker.scheduler.create_task_if_not_exists",
+                new_callable=AsyncMock, return_value="task-id",
+            ) as mock_create,
+        ):
+            await backfill_scrape(db=db, settings=settings)
+
+            assert mock_create.call_count == 3
+            mock_create.assert_any_call(db, "blog-1", "full_scrape", priority=6)
+            mock_create.assert_any_call(db, "blog-2", "full_scrape", priority=6)
+            mock_create.assert_any_call(db, "blog-3", "full_scrape", priority=6)
+
+    @pytest.mark.asyncio
+    async def test_empty_rpc_result(self) -> None:
+        from src.worker.scheduler import backfill_scrape
+
+        settings = MagicMock()
+        settings.backfill_scrape_batch_size = 80
+
+        db = make_db_mock()
+        rpc_result = MagicMock()
+        rpc_result.data = []
+        rpc_mock = MagicMock()
+        rpc_mock.execute = AsyncMock(return_value=rpc_result)
+        db.rpc.return_value = rpc_mock
+
+        with (
+            patch("src.worker.scheduler.has_recent_balance_errors", new_callable=AsyncMock, return_value=False),
+            patch("src.worker.scheduler.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
+        ):
+            await backfill_scrape(db=db, settings=settings)
+            mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_on_balance_errors(self) -> None:
+        from src.worker.scheduler import backfill_scrape
+
+        settings = MagicMock()
+        settings.backfill_scrape_batch_size = 80
+
+        db = make_db_mock()
+
+        with (
+            patch("src.worker.scheduler.has_recent_balance_errors", new_callable=AsyncMock, return_value=True),
+            patch("src.worker.scheduler.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
+        ):
+            await backfill_scrape(db=db, settings=settings)
+            mock_create.assert_not_called()
+
+
+class TestBackfillAiAnalysis:
+    """Тесты backfill_ai_analysis."""
+
+    @pytest.mark.asyncio
+    async def test_creates_tasks_for_unanalyzed_blogs(self) -> None:
+        from src.worker.scheduler import backfill_ai_analysis
+
+        settings = MagicMock()
+        settings.backfill_ai_batch_size = 50
+
+        db = make_db_mock()
+        rpc_result = MagicMock()
+        rpc_result.data = [{"id": "blog-1"}, {"id": "blog-2"}]
+        rpc_mock = MagicMock()
+        rpc_mock.execute = AsyncMock(return_value=rpc_result)
+        db.rpc.return_value = rpc_mock
+
+        with (
+            patch("src.worker.scheduler.has_recent_balance_errors", new_callable=AsyncMock, return_value=False),
+            patch(
+                "src.worker.scheduler.create_task_if_not_exists",
+                new_callable=AsyncMock, return_value="task-id",
+            ) as mock_create,
+        ):
+            await backfill_ai_analysis(db=db, settings=settings)
+
+            assert mock_create.call_count == 2
+            mock_create.assert_any_call(db, "blog-1", "ai_analysis", priority=2)
+            mock_create.assert_any_call(db, "blog-2", "ai_analysis", priority=2)
+
+    @pytest.mark.asyncio
+    async def test_empty_rpc_result(self) -> None:
+        from src.worker.scheduler import backfill_ai_analysis
+
+        settings = MagicMock()
+        settings.backfill_ai_batch_size = 50
+
+        db = make_db_mock()
+        rpc_result = MagicMock()
+        rpc_result.data = []
+        rpc_mock = MagicMock()
+        rpc_mock.execute = AsyncMock(return_value=rpc_result)
+        db.rpc.return_value = rpc_mock
+
+        with (
+            patch("src.worker.scheduler.has_recent_balance_errors", new_callable=AsyncMock, return_value=False),
+            patch("src.worker.scheduler.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
+        ):
+            await backfill_ai_analysis(db=db, settings=settings)
+            mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_on_openai_balance_errors(self) -> None:
+        from src.worker.scheduler import backfill_ai_analysis
+
+        settings = MagicMock()
+        settings.backfill_ai_batch_size = 50
+
+        db = make_db_mock()
+
+        with (
+            patch(
+                "src.worker.scheduler.has_recent_balance_errors",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("src.worker.scheduler.create_task_if_not_exists", new_callable=AsyncMock) as mock_create,
+        ):
+            await backfill_ai_analysis(db=db, settings=settings)
+            mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_on_billing_hard_limit(self) -> None:
+        """Пропуск при ошибке billing_hard_limit (второй паттерн)."""
+        from src.worker.scheduler import backfill_ai_analysis
+
+        settings = MagicMock()
+        settings.backfill_ai_batch_size = 50
+
+        db = make_db_mock()
+
+        with (
+            patch(
+                "src.worker.scheduler.has_recent_balance_errors",
+                new_callable=AsyncMock,
+                # insufficient_quota=False, billing_hard_limit=True
+                side_effect=[False, True],
+            ),
+            patch(
+                "src.worker.scheduler.create_task_if_not_exists",
+                new_callable=AsyncMock,
+            ) as mock_create,
+        ):
+            await backfill_ai_analysis(db=db, settings=settings)
+            mock_create.assert_not_called()

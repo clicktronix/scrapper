@@ -285,7 +285,11 @@ async def recover_stuck_tasks(
             recovered += 1
 
     if recovered:
-        logger.warning(f"Recovered {recovered} stuck tasks")
+        types: dict[str, int] = {}
+        for t in all_tasks:
+            tt = str(t.get("task_type", "?"))
+            types[tt] = types.get(tt, 0) + 1
+        logger.warning(f"Recovered {recovered} stuck tasks ({types})")
     return recovered
 
 

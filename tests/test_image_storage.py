@@ -477,3 +477,52 @@ class TestDeleteBlogImages:
         result = await delete_blog_images(mock_db, "../evil")
         assert result == 0
         mock_storage_bucket.list.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_db_update_fails_after_storage_remove(self) -> None:
+        """Файлы удалены из Storage, но обнуление thumbnail_url в БД упало.
+
+        Regression: раньше оба вызова были в одном try — если storage.remove
+        проходил, но db.table().update() падал, возвращался 0 (как будто файлы не удалены).
+        Сейчас storage deletion и DB update — отдельные try-блоки.
+        """
+        from src.image_storage import delete_blog_images
+
+        mock_db = MagicMock()
+        mock_storage_bucket = MagicMock()
+        mock_db.storage.from_.return_value = mock_storage_bucket
+        files = [
+            {"name": "avatar.jpg"},
+            {"name": "post_abc.jpg"},
+        ]
+        mock_storage_bucket.list = AsyncMock(return_value=files)
+        mock_storage_bucket.remove = AsyncMock()  # Storage remove OK
+
+        # DB update fails
+        table_mock = MagicMock()
+        mock_db.table.return_value = table_mock
+        table_mock.update.return_value = table_mock
+        table_mock.eq.return_value = table_mock
+        table_mock.execute = AsyncMock(side_effect=Exception("DB connection lost"))
+
+        result = await delete_blog_images(mock_db, "blog-1")
+        # Файлы удалены (1 пост, avatar сохранён), возвращаем count
+        assert result == 1
+        mock_storage_bucket.remove.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_storage_remove_fails_db_untouched(self) -> None:
+        """Если storage.remove упал, DB update НЕ вызывается."""
+        from src.image_storage import delete_blog_images
+
+        mock_db = MagicMock()
+        mock_storage_bucket = MagicMock()
+        mock_db.storage.from_.return_value = mock_storage_bucket
+        files = [{"name": "post_abc.jpg"}]
+        mock_storage_bucket.list = AsyncMock(return_value=files)
+        mock_storage_bucket.remove = AsyncMock(side_effect=Exception("Storage API error"))
+
+        result = await delete_blog_images(mock_db, "blog-1")
+        assert result == 0
+        # DB update не должен вызываться если файлы не удалены
+        mock_db.table.assert_not_called()

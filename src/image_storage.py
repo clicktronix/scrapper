@@ -244,13 +244,22 @@ async def delete_blog_images(db: AsyncClient, blog_id: str) -> int:
 
     try:
         await db.storage.from_(IMAGES_BUCKET).remove(post_paths)
-        # Обнуляем thumbnail_url у постов, чтобы при rescrape загрузились новые
+    except Exception as e:
+        logger.error(f"[image_storage] Ошибка удаления файлов из Storage для blog={blog_id}: {e}")
+        return 0
+
+    # Обнуляем thumbnail_url у постов, чтобы при rescrape загрузились новые.
+    # Отдельный try — файлы уже удалены, БД должна быть синхронизирована.
+    try:
         await db.table("blog_posts") \
             .update({"thumbnail_url": None}) \
             .eq("blog_id", blog_id) \
             .execute()
-        logger.debug(f"[image_storage] Удалено {len(post_paths)} файлов постов для blog={blog_id}")
-        return len(post_paths)
     except Exception as e:
-        logger.error(f"[image_storage] Ошибка удаления файлов для blog={blog_id}: {e}")
-        return 0
+        logger.error(
+            f"[image_storage] Файлы удалены ({len(post_paths)}), но не удалось "
+            f"обнулить thumbnail_url в БД для blog={blog_id}: {e}"
+        )
+
+    logger.debug(f"[image_storage] Удалено {len(post_paths)} файлов постов для blog={blog_id}")
+    return len(post_paths)

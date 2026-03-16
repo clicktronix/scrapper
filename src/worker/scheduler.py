@@ -7,6 +7,7 @@ import openai
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
 from openai import AsyncOpenAI
+from postgrest.types import CountMethod
 from supabase import AsyncClient
 
 from src.ai.embedding import build_embedding_text, generate_embedding
@@ -51,6 +52,93 @@ def _as_rows(data: Any) -> list[dict[str, Any]]:
         if isinstance(item, dict):
             rows.append(cast(dict[str, Any], item))
     return rows
+
+
+async def has_recent_balance_errors(
+    db: AsyncClient,
+    pattern: str,
+    minutes: int = 30,
+) -> bool:
+    """Проверить наличие ошибок баланса API за последние N минут.
+
+    Ищем по updated_at (триггер update_updated_at_column) без фильтра по status,
+    т.к. HikerAPI 402 → status='failed' без completed_at,
+    а OpenAI quota → status='pending' с откатом попыток.
+    """
+    threshold = (datetime.now(UTC) - timedelta(minutes=minutes)).isoformat()
+    result = await (
+        db.table("scrape_tasks")
+        .select("id", count=CountMethod.exact)
+        .like("error_message", f"%{pattern}%")
+        .gt("updated_at", threshold)
+        .limit(1)
+        .execute()
+    )
+    return bool(result.count and result.count > 0)
+
+
+async def backfill_scrape(db: AsyncClient, settings: Settings) -> None:
+    """Создать full_scrape задачи для pending блогов без скрапинга."""
+    record_job_run("backfill_scrape")
+
+    if await has_recent_balance_errors(db, "insufficient balance"):
+        logger.warning("[backfill_scrape] Пропуск: недавние ошибки баланса HikerAPI")
+        return
+
+    result = await db.rpc(
+        "backfill_pending_blogs",
+        {"p_limit": settings.backfill_scrape_batch_size},
+    ).execute()
+
+    blog_ids = [str(row.get("id", "")) for row in _as_rows(result.data) if row.get("id")]
+    if not blog_ids:
+        logger.debug("[backfill_scrape] Нет pending блогов для backfill")
+        return
+
+    created = 0
+    for blog_id in blog_ids:
+        try:
+            task_id = await create_task_if_not_exists(db, blog_id, "full_scrape", priority=6)
+            if task_id:
+                created += 1
+        except Exception as e:
+            logger.error(f"[backfill_scrape] Ошибка создания задачи для blog {blog_id}: {e}")
+
+    logger.info(f"[backfill_scrape] Создано {created} задач из {len(blog_ids)} pending блогов")
+
+
+async def backfill_ai_analysis(db: AsyncClient, settings: Settings) -> None:
+    """Создать ai_analysis задачи для блогов без insights."""
+    record_job_run("backfill_ai_analysis")
+
+    # Проверяем оба паттерна ошибок OpenAI
+    if (
+        await has_recent_balance_errors(db, "insufficient_quota")
+        or await has_recent_balance_errors(db, "billing_hard_limit")
+    ):
+        logger.warning("[backfill_ai] Пропуск: недавние ошибки баланса OpenAI")
+        return
+
+    result = await db.rpc(
+        "backfill_unanalyzed_blogs",
+        {"p_limit": settings.backfill_ai_batch_size},
+    ).execute()
+
+    blog_ids = [str(row.get("id", "")) for row in _as_rows(result.data) if row.get("id")]
+    if not blog_ids:
+        logger.debug("[backfill_ai] Нет блогов без AI insights для backfill")
+        return
+
+    created = 0
+    for blog_id in blog_ids:
+        try:
+            task_id = await create_task_if_not_exists(db, blog_id, "ai_analysis", priority=2)
+            if task_id:
+                created += 1
+        except Exception as e:
+            logger.error(f"[backfill_ai] Ошибка создания задачи для blog {blog_id}: {e}")
+
+    logger.info(f"[backfill_ai] Создано {created} задач из {len(blog_ids)} блогов без insights")
 
 
 async def schedule_updates(db: AsyncClient, settings: Settings) -> None:
@@ -449,5 +537,25 @@ def create_scheduler(
         kwargs={"db": db, "settings": settings},
         id="cleanup_old_images",
     )
+
+    # Backfill: автоскрап pending блогов
+    if settings.backfill_scrape_enabled:
+        sched.add_job(
+            backfill_scrape,
+            "interval",
+            minutes=settings.backfill_scrape_interval_minutes,
+            kwargs={"db": db, "settings": settings},
+            id="backfill_scrape",
+        )
+
+    # Backfill: AI анализ для блогов без insights
+    if settings.backfill_ai_enabled:
+        sched.add_job(
+            backfill_ai_analysis,
+            "interval",
+            minutes=settings.backfill_ai_interval_minutes,
+            kwargs={"db": db, "settings": settings},
+            id="backfill_ai_analysis",
+        )
 
     return scheduler

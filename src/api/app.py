@@ -270,7 +270,7 @@ def create_app(db: AsyncClient, pool: AccountPool | None, settings: Settings) ->
     async def retry_task(task_id: UUID = Path(description="UUID задачи")) -> dict[str, str]:
         """Повторить упавшую задачу — сбросить в pending."""
         tid = str(task_id)
-        result = await db.table("scrape_tasks").select("id, status").eq("id", tid).execute()
+        result = await db.table("scrape_tasks").select("id, status, task_type, blog_id").eq("id", tid).execute()
         if not result.data:
             raise HTTPException(status_code=404, detail="Task not found")
 
@@ -292,6 +292,9 @@ def create_app(db: AsyncClient, pool: AccountPool | None, settings: Settings) ->
         if refreshed_task.get("status") != "pending":
             raise HTTPException(status_code=409, detail="Task state changed concurrently")
 
+        logger.info(
+            f"[api] Task {tid} retried: type={task.get('task_type')}, blog={task.get('blog_id')}"
+        )
         return {"task_id": tid, "status": "retrying"}
 
     return app
