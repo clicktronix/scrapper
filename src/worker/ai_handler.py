@@ -767,6 +767,40 @@ async def handle_batch_results(
             for blog_id, text in ctx.pending_embeddings
         ])
 
+    # Сохраняем usage токенов в batch_usage_log и логируем стоимость
+    batch_usage: dict[str, int] = cast(dict[str, int], result.get("usage")) or {}
+    input_tokens = batch_usage.get("input_tokens", 0)
+    output_tokens = batch_usage.get("output_tokens", 0)
+    total_tokens = batch_usage.get("total_tokens", 0)
+    reasoning_tokens = batch_usage.get("reasoning_tokens", 0)
+    cached_tokens = batch_usage.get("cached_tokens", 0)
+
+    # Расчёт стоимости (Batch API = 50% от стандартных цен)
+    # gpt-5-mini: input $0.15/1M, cached $0.075/1M, output $0.60/1M
+    # Batch скидка 50%: input $0.075/1M, cached $0.0375/1M, output $0.30/1M
+    non_cached_input = input_tokens - cached_tokens
+    cost_usd = (
+        non_cached_input * 0.075 / 1_000_000
+        + cached_tokens * 0.0375 / 1_000_000
+        + output_tokens * 0.30 / 1_000_000
+    )
+
+    if total_tokens > 0:
+        try:
+            await db.table("batch_usage_log").insert({
+                "batch_id": batch_id,
+                "model": "gpt-5-mini",
+                "request_count": len(results),
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": total_tokens,
+                "reasoning_tokens": reasoning_tokens,
+                "cached_tokens": cached_tokens,
+                "cost_usd": round(cost_usd, 6),
+            }).execute()
+        except Exception as usage_err:
+            logger.warning(f"[batch_results] Не удалось сохранить usage для {batch_id}: {usage_err}")
+
     tm = ctx.taxonomy_metrics
     logger.info(
         f"Batch {batch_id} processed: {len(results)} results | "
@@ -776,5 +810,8 @@ async def handle_batch_results(
         f"tags: total={tm['tags_total']}, "
         f"matched={tm['tags_matched']}, "
         f"unmatched={tm['tags_unmatched']} | "
-        f"taxonomy_errors={tm['taxonomy_errors']}"
+        f"taxonomy_errors={tm['taxonomy_errors']} | "
+        f"tokens: {total_tokens:,} (in={input_tokens:,}, out={output_tokens:,}, "
+        f"reasoning={reasoning_tokens:,}, cached={cached_tokens:,}) | "
+        f"cost=${cost_usd:.4f}"
     )

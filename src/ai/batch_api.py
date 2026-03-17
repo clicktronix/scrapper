@@ -358,6 +358,11 @@ async def poll_batch(client: AsyncOpenAI, batch_id: str) -> dict[str, Any]:
     results: dict[str, BatchResult] = {}
     output_line_count = 0
     error_line_count = 0
+    # Аккумуляторы токенов per-request usage
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_reasoning_tokens = 0
+    total_cached_tokens = 0
 
     # Скачиваем успешные результаты
     if batch.output_file_id:
@@ -404,6 +409,17 @@ async def poll_batch(client: AsyncOpenAI, batch_id: str) -> dict[str, Any]:
                 continue
 
             response_body = cast(dict[str, Any], response.get("body")) or {}
+
+            # Собираем usage токенов из каждого ответа
+            usage: dict[str, Any] = cast(dict[str, Any], response_body.get("usage")) or {}
+            total_input_tokens += int(usage.get("prompt_tokens", 0))
+            total_output_tokens += int(usage.get("completion_tokens", 0))
+            # reasoning_tokens и cached_tokens — вложенные объекты
+            completion_details = cast(dict[str, Any], usage.get("completion_tokens_details")) or {}
+            total_reasoning_tokens += int(completion_details.get("reasoning_tokens", 0))
+            prompt_details = cast(dict[str, Any], usage.get("prompt_tokens_details")) or {}
+            total_cached_tokens += int(prompt_details.get("cached_tokens", 0))
+
             choices: list[Any] = cast(list[Any], response_body.get("choices")) or []
 
             if not choices:
@@ -478,4 +494,14 @@ async def poll_batch(client: AsyncOpenAI, batch_id: str) -> dict[str, Any]:
             f"actual_total={actual_total}"
         )
 
-    return {"status": batch.status, "results": results}
+    return {
+        "status": batch.status,
+        "results": results,
+        "usage": {
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens,
+            "total_tokens": total_input_tokens + total_output_tokens,
+            "reasoning_tokens": total_reasoning_tokens,
+            "cached_tokens": total_cached_tokens,
+        },
+    }
