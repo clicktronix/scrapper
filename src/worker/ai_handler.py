@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from loguru import logger
 from openai import AsyncOpenAI
@@ -462,6 +462,135 @@ def _dedup_brands(brands: list[str]) -> list[str]:
     return unique
 
 
+# Маппинг англоязычных стран → русские названия
+_COUNTRY_NORMALIZE: dict[str, str] = {
+    "kazakhstan": "Казахстан",
+    "russia": "Россия",
+    "uzbekistan": "Узбекистан",
+    "kyrgyzstan": "Кыргызстан",
+    "tajikistan": "Таджикистан",
+    "turkmenistan": "Туркменистан",
+    "azerbaijan": "Азербайджан",
+    "georgia": "Грузия",
+    "armenia": "Армения",
+    "turkey": "Турция",
+    "uae": "ОАЭ",
+    "united arab emirates": "ОАЭ",
+    "qatar": "Катар",
+    "china": "Китай",
+    "south korea": "Южная Корея",
+    "japan": "Япония",
+    "usa": "США",
+    "united states": "США",
+    "uk": "Великобритания",
+    "united kingdom": "Великобритания",
+    "germany": "Германия",
+    "france": "Франция",
+    "italy": "Италия",
+    "spain": "Испания",
+    "canada": "Канада",
+    "australia": "Австралия",
+    "kz": "Казахстан",
+    "қазақстан": "Казахстан",
+}
+
+
+def _normalize_country(country: str | None) -> str | None:
+    """Нормализовать страну к русскому названию."""
+    if not country:
+        return None
+    return _COUNTRY_NORMALIZE.get(country.lower().strip(), country)
+
+
+_PostingFrequency = Literal["rare", "weekly", "several_per_week", "daily"]
+
+
+def _normalize_posting_frequency(
+    ai_freq: _PostingFrequency | None,
+    posts_per_week: float | None,
+) -> _PostingFrequency | None:
+    """Переопределить posting_frequency по фактическому posts_per_week."""
+    if posts_per_week is None:
+        return ai_freq
+    if posts_per_week < 0.5:
+        return "rare"
+    if posts_per_week < 1.5:
+        return "weekly"
+    if posts_per_week < 5:
+        return "several_per_week"
+    return "daily"
+
+
+def _deduplicate_list(items: list[str]) -> list[str]:
+    """Дедупликация списка строк с сохранением порядка."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def _normalize_insights(insights: AIInsights, posts_per_week: float | None) -> None:
+    """Постпроцессинг AIInsights: нормализация и дедупликация полей."""
+    # Нормализация страны к русскому
+    if insights.blogger_profile.country:
+        normalized = _normalize_country(insights.blogger_profile.country)
+        if normalized != insights.blogger_profile.country:
+            logger.debug(
+                f"[normalize] country: '{insights.blogger_profile.country}' -> '{normalized}'"
+            )
+            insights.blogger_profile.country = normalized
+
+    # Переопределение posting_frequency по фактическому posts_per_week
+    original_freq = insights.content.posting_frequency
+    corrected_freq = _normalize_posting_frequency(original_freq, posts_per_week)
+    if corrected_freq != original_freq:
+        logger.debug(
+            f"[normalize] posting_frequency: '{original_freq}' -> '{corrected_freq}' "
+            f"(posts_per_week={posts_per_week})"
+        )
+        insights.content.posting_frequency = corrected_freq
+
+    # Дедупликация списков в marketing_value
+    insights.marketing_value.best_fit_industries = _deduplicate_list(
+        insights.marketing_value.best_fit_industries
+    )
+    insights.marketing_value.not_suitable_for = _deduplicate_list(
+        insights.marketing_value.not_suitable_for
+    )
+    insights.marketing_value.values_and_causes = _deduplicate_list(
+        insights.marketing_value.values_and_causes
+    )
+
+    # Дедупликация в audience
+    insights.audience_inference.geo_mentions = _deduplicate_list(
+        insights.audience_inference.geo_mentions
+    )
+    insights.audience_inference.audience_interests = _deduplicate_list(
+        insights.audience_inference.audience_interests
+    )
+
+    # Дедупликация в content
+    insights.content.content_language = _deduplicate_list(
+        insights.content.content_language
+    )
+
+    # Дедупликация в commercial
+    insights.commercial.detected_brand_categories = _deduplicate_list(
+        insights.commercial.detected_brand_categories
+    )
+
+    # Дедупликация остальных списков
+    insights.blogger_profile.speaks_languages = _deduplicate_list(
+        insights.blogger_profile.speaks_languages
+    )
+    insights.lifestyle.pet_types = _deduplicate_list(
+        insights.lifestyle.pet_types
+    )
+
+
 async def _retry_enrichment(
     fn: Callable[[], Awaitable[dict[str, int]]],
 ) -> dict[str, int]:
@@ -524,6 +653,12 @@ async def _process_blog_result(
         if not isinstance(insights, AIInsights):
             logger.error(f"[batch_results] Unexpected insights type for {blog_id}: {type(cast(object, insights))}")
             return
+
+        # Постпроцессинг: нормализация полей, дедупликация списков
+        # posts_per_week берём из текущих данных блога в БД
+        current_blog_data = current_by_id.get(blog_id, {})
+        _normalize_insights(insights, current_blog_data.get("posts_per_week"))
+
         extracted = _extract_blog_fields(insights)
         current = current_by_id.get(blog_id, {})
         for field in list(extracted.keys()):
@@ -656,7 +791,8 @@ async def handle_batch_results(
     if blog_ids_with_results:
         current_blogs = await db.table("blogs").select(
             "id, city, content_language, audience_gender,"
-            " audience_age, audience_countries, scrape_status, ai_insights"
+            " audience_age, audience_countries, scrape_status, ai_insights,"
+            " posts_per_week"
         ).in_("id", blog_ids_with_results).execute()
         current_rows = cast(list[dict[str, Any]], current_blogs.data or [])
         current_by_id = {str(b["id"]): b for b in current_rows}

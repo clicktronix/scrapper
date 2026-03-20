@@ -214,6 +214,23 @@ class ContentProfile(BaseModel):
         "'ссылки на товары', 'промокоды'. null если нет CTA.",
     )
 
+    # Дедупликация secondary_topics — GPT может вернуть повторы
+    @model_validator(mode="after")
+    def _deduplicate_secondary_topics(self) -> ContentProfile:
+        if self.secondary_topics:
+            seen: set[str] = set()
+            unique: list[str] = []
+            for t in self.secondary_topics:
+                if t not in seen:
+                    seen.add(t)
+                    unique.append(t)
+            if len(unique) != len(self.secondary_topics):
+                logger.warning(
+                    f"[schemas] secondary_topics дубли удалены: {len(self.secondary_topics)} -> {len(unique)}"
+                )
+            object.__setattr__(self, "secondary_topics", unique)
+        return self
+
 
 class CommercialActivity(BaseModel):
     """Коммерческая активность — реклама, бренды, партнёрки."""
@@ -549,3 +566,18 @@ class AIInsights(BaseModel):
         "4=хорошая база (много постов, подробное био, хайлайты). "
         "5=отличная полнота данных (много постов с текстом, комментарии, хайлайты).",
     )
+
+    # Дедупликация tags — GPT может вернуть повторы
+    @model_validator(mode="after")
+    def _deduplicate_tags(self) -> AIInsights:
+        if self.tags:
+            seen: set[str] = set()
+            unique: list[str] = []
+            for t in self.tags:
+                if t not in seen:
+                    seen.add(t)
+                    unique.append(t)
+            if len(unique) != len(self.tags):
+                logger.warning(f"[schemas] tags дубли удалены: {len(self.tags)} -> {len(unique)}")
+            object.__setattr__(self, "tags", unique)
+        return self
