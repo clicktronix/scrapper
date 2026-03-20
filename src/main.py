@@ -39,7 +39,19 @@ async def main() -> None:
     asyncio.get_running_loop().set_default_executor(executor)
 
     # Supabase (async клиент — без тредов, без EAGAIN)
-    db = await create_async_client(settings.supabase_url, settings.supabase_service_key.get_secret_value())
+    # Retry при недоступности PostgREST (индексация, перезагрузка и т.д.)
+    for _attempt in range(30):
+        try:
+            db = await create_async_client(
+                settings.supabase_url, settings.supabase_service_key.get_secret_value(),
+            )
+            break
+        except Exception as e:
+            logger.warning(f"[main] Supabase подключение не удалось (попытка {_attempt + 1}/30): {e}")
+            await asyncio.sleep(10)
+    else:
+        logger.error("[main] Не удалось подключиться к Supabase за 30 попыток")
+        sys.exit(1)
 
     # Персистить WARNING+ логи в Supabase.
     # Sink вызывается из loguru-треда (enqueue=True), поэтому передаём event loop
