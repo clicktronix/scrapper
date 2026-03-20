@@ -36,7 +36,7 @@ class TestHealth:
         assert data["accounts_available"] == 2
 
     def test_health_db_error_returns_minus_one(self) -> None:
-        """При ошибке БД — статус degraded и HTTP 503."""
+        """При ошибке БД — статус degraded, но HTTP 200 (сервер работает)."""
         db = make_db_mock()
         builder = db.table.return_value
         builder.execute.side_effect = Exception("DB down")
@@ -46,7 +46,7 @@ class TestHealth:
         client = TestClient(app)
         resp = client.get("/api/health")
 
-        assert resp.status_code == 503
+        assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "degraded"
         assert data["tasks_running"] == -1

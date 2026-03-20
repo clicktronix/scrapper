@@ -157,7 +157,8 @@ async def get_health_status(
             status = "ok"
             logger.info(f"[health] Fallback из queue_depth: running={tasks_running}, pending={tasks_pending}")
         else:
-            response.status_code = 503
+            # НЕ возвращаем 503 — сервер работает, БД временно недоступна.
+            # Railway healthcheck убивает деплой при 503, что усугубляет проблему.
             tasks_running = -1
             tasks_pending = -1
             status = "degraded"

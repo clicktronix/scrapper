@@ -81,7 +81,7 @@ class TestGetHealthStatus:
 
     @pytest.mark.asyncio
     async def test_degraded_on_db_error(self) -> None:
-        """При ошибке БД — статус degraded, response.status_code = 503."""
+        """При ошибке БД — статус degraded, но HTTP 200 (сервер работает)."""
         db = make_db_mock()
         builder = db.table.return_value
         builder.execute.side_effect = Exception("DB down")
@@ -94,7 +94,8 @@ class TestGetHealthStatus:
         assert result.status == "degraded"
         assert result.tasks_running == -1
         assert result.tasks_pending == -1
-        assert response.status_code == 503
+        # HTTP 200 — сервер работает, БД временно недоступна
+        assert response.status_code == 200
 
 
 class TestFetchTasksList:
