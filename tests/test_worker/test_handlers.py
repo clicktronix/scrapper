@@ -2985,15 +2985,18 @@ class TestHandleBatchResultsTagsAndEmbedding:
             async def _side_effect_execute():
                 nonlocal call_count
                 call_count += 1
-                # Первый вызов — SELECT blogs, второй и далее — UPDATE
+                # 1: SELECT cities (для build_city_map)
                 if call_count == 1:
+                    return MagicMock(data=[])
+                # 2: SELECT blogs
+                if call_count == 2:
                     return MagicMock(data=[
                         {"id": "blog-bad", "city": None, "content_language": None,
                          "audience_gender": None, "scrape_status": "active"},
                         {"id": "blog-ok", "city": None, "content_language": None,
                          "audience_gender": None, "scrape_status": "active"},
                     ])
-                if call_count == 2:
+                if call_count == 3:
                     # blog-bad: update падает
                     raise Exception("\\u0000 cannot be converted to text")
                 return MagicMock(data=[])

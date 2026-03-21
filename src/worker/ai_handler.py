@@ -12,6 +12,7 @@ from supabase import AsyncClient
 
 import src.worker.handlers as _h
 from src.ai.normalize import (
+    build_city_map,
     deduplicate_list,
     normalize_city,
     normalize_country,
@@ -78,6 +79,7 @@ class BatchContext:
     categories_cache: dict[str, str]
     tags_cache: dict[str, str]
     cities_cache: dict[str, str]
+    city_map: dict[str, str] = field(default_factory=dict)  # {lowercase_variant: русское_название}
     taxonomy_metrics: dict[str, int] = field(
         default_factory=lambda: {
             "categories_total": 0,
@@ -488,7 +490,11 @@ def _dedup_brands(brands: list[str]) -> list[str]:
     return unique
 
 
-def _normalize_insights(insights: AIInsights, posts_per_week: float | None) -> None:
+def _normalize_insights(
+    insights: AIInsights,
+    posts_per_week: float | None,
+    city_map: dict[str, str] | None = None,
+) -> None:
     """Постпроцессинг AIInsights: нормализация и дедупликация полей."""
     # Нормализация страны к русскому
     if insights.blogger_profile.country:
@@ -497,9 +503,9 @@ def _normalize_insights(insights: AIInsights, posts_per_week: float | None) -> N
             logger.debug(f"[normalize] country: '{insights.blogger_profile.country}' -> '{normalized}'")
             insights.blogger_profile.country = normalized
 
-    # Нормализация города к русскому
+    # Нормализация города к русскому (по данным из таблицы cities)
     if insights.blogger_profile.city:
-        normalized_city = normalize_city(insights.blogger_profile.city)
+        normalized_city = normalize_city(insights.blogger_profile.city, city_map)
         if normalized_city != insights.blogger_profile.city:
             logger.debug(f"[normalize] city: '{insights.blogger_profile.city}' -> '{normalized_city}'")
             insights.blogger_profile.city = normalized_city
@@ -606,7 +612,7 @@ async def _process_blog_result(
         # Постпроцессинг: нормализация полей, дедупликация списков
         # posts_per_week берём из текущих данных блога в БД
         current_blog_data = current_by_id.get(blog_id, {})
-        _normalize_insights(insights, current_blog_data.get("posts_per_week"))
+        _normalize_insights(insights, current_blog_data.get("posts_per_week"), ctx.city_map)
 
         extracted = _extract_blog_fields(insights)
         current = current_by_id.get(blog_id, {})
@@ -732,6 +738,10 @@ async def handle_batch_results(
     tags_cache = await _h.load_tags(db)
     cities_cache = await _h.load_cities(db)
 
+    # Строим маппинг городов для нормализации (EN→RU) из таблицы cities
+    cities_result = await db.table("cities").select("name, ascii_name, l10n").execute()
+    city_map = build_city_map(cast(list[dict[str, object]], cities_result.data or []))
+
     # Загружаем текущие значения полей для всех блогов в батче (чтобы не перезаписывать заполненные)
     blog_ids_with_results = list(results.keys())
     current_by_id: dict[str, dict[str, Any]] = {}
@@ -757,6 +767,7 @@ async def handle_batch_results(
         categories_cache=categories_cache,
         tags_cache=tags_cache,
         cities_cache=cities_cache,
+        city_map=city_map,
     )
 
     def _get_task_infos(blog_id: str) -> list[tuple[str, int, int]]:

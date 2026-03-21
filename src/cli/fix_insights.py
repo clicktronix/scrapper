@@ -23,7 +23,7 @@ from loguru import logger
 from supabase import create_async_client
 
 # Нормализация страны — единый источник в src.ai.normalize
-from src.ai.normalize import normalize_city, normalize_country
+from src.ai.normalize import build_city_map, normalize_city, normalize_country
 from src.config import load_settings
 
 # Паттерн для удаления префиксов индустрий
@@ -62,7 +62,11 @@ def _fix_posting_frequency(freq: str | None, ppw: float | None) -> str | None:
     return "daily"
 
 
-def _fix_insights(insights: dict[str, Any], ppw: float | None) -> tuple[dict[str, Any], list[str]]:
+def _fix_insights(
+    insights: dict[str, Any],
+    ppw: float | None,
+    city_map: dict[str, str] | None = None,
+) -> tuple[dict[str, Any], list[str]]:
     """Исправить ai_insights, вернуть (fixed_insights, list_of_changes)."""
     changes: list[str] = []
 
@@ -80,7 +84,7 @@ def _fix_insights(insights: dict[str, Any], ppw: float | None) -> tuple[dict[str
     if isinstance(bp, dict):
         city = bp.get("city")
         if city and isinstance(city, str):
-            normalized_city = normalize_city(city)
+            normalized_city = normalize_city(city, city_map)
             if normalized_city and normalized_city != city:
                 bp["city"] = normalized_city
                 changes.append(f"city: '{city}' → '{normalized_city}'")
@@ -156,6 +160,11 @@ async def main(limit: int | None = None, dry_run: bool = False) -> None:
     settings = load_settings()
     db = await create_async_client(settings.supabase_url, settings.supabase_service_key.get_secret_value())
 
+    # Загружаем маппинг городов из БД
+    cities_result = await db.table("cities").select("name, ascii_name, l10n").execute()
+    city_map = build_city_map(cast(list[dict[str, object]], cities_result.data or []))
+    logger.info(f"Загружено {len(city_map)} вариантов городов для нормализации")
+
     batch_size = 100
     offset = 0
     total_fixed = 0
@@ -203,7 +212,7 @@ async def main(limit: int | None = None, dry_run: bool = False) -> None:
             if insights.get("refusal_reason"):
                 continue
 
-            fixed, changes = _fix_insights(insights, ppw)
+            fixed, changes = _fix_insights(insights, ppw, city_map)
             if changes:
                 updates.append((blog_id, fixed))
                 for c in changes:

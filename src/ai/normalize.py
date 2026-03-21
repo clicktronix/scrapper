@@ -264,137 +264,90 @@ def normalize_country(country: str | None) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# City нормализация
+# City нормализация (на основе таблицы cities из БД)
 # ---------------------------------------------------------------------------
 
-# Казахстанские города: английские/нестандартные → русские
-CITY_NORMALIZE: dict[str, str] = {
-    # Алматы
-    "almaty": "Алматы",
+# Дополнительные алиасы, которых нет в БД (исторические названия, опечатки)
+_CITY_EXTRA_ALIASES: dict[str, str] = {
+    "alma-ата": "Алматы",
     "alma-ata": "Алматы",
     "alma ata": "Алматы",
     "алма-ата": "Алматы",
     "алмата": "Алматы",
-    # Астана
-    "astana": "Астана",
     "nur-sultan": "Астана",
     "nursultan": "Астана",
     "нур-султан": "Астана",
-    # Шымкент
-    "shymkent": "Шымкент",
     "chimkent": "Шымкент",
     "чимкент": "Шымкент",
-    # Караганда
-    "karaganda": "Караганда",
-    "karagandy": "Караганда",
-    "qaragandy": "Караганда",
-    # Актобе
-    "aktobe": "Актобе",
-    "aqtobe": "Актобе",
-    "aktobe city": "Актобе",
     "актюбинск": "Актобе",
-    # Актау
-    "aktau": "Актау",
-    "aqtau": "Актау",
-    # Атырау
-    "atyrau": "Атырау",
-    # Тараз
-    "taraz": "Тараз",
-    "жамбыл": "Тараз",
-    # Павлодар
-    "pavlodar": "Павлодар",
-    # Усть-Каменогорск
-    "ust-kamenogorsk": "Усть-Каменогорск",
-    "oskemen": "Усть-Каменогорск",
-    "öskemen": "Усть-Каменогорск",
-    # Семей
-    "semey": "Семей",
     "semipalatinsk": "Семей",
     "семипалатинск": "Семей",
-    # Кызылорда
-    "kyzylorda": "Кызылорда",
-    "qyzylorda": "Кызылорда",
-    # Костанай
-    "kostanay": "Костанай",
-    "kostanai": "Костанай",
-    "qostanay": "Костанай",
     "кустанай": "Костанай",
-    # Уральск
-    "uralsk": "Уральск",
-    "oral": "Уральск",
-    # Петропавловск
-    "petropavlovsk": "Петропавловск",
-    # Кокшетау
-    "kokshetau": "Кокшетау",
-    "kökshetau": "Кокшетау",
-    # Талдыкорган
-    "taldykorgan": "Талдыкорган",
-    # Туркестан
-    "turkestan": "Туркестан",
-    "turkistan": "Туркестан",
-    # Экибастуз
-    "ekibastuz": "Экибастуз",
-    # Степногорск
-    "stepnogorsk": "Степногорск",
-    # Темиртау
-    "temirtau": "Темиртау",
-    # Жанаозен
-    "zhanaozen": "Жанаозен",
-    # Балхаш
-    "balkhash": "Балхаш",
-    # Байконур
-    "baikonur": "Байконур",
-    # Россия
-    "moscow": "Москва",
-    "saint petersburg": "Санкт-Петербург",
+    "джамбул": "Тараз",
+    "жамбыл": "Тараз",
     "st petersburg": "Санкт-Петербург",
     "st. petersburg": "Санкт-Петербург",
-    "novosibirsk": "Новосибирск",
-    "yekaterinburg": "Екатеринбург",
-    "kazan": "Казань",
-    "krasnoyarsk": "Красноярск",
-    "sochi": "Сочи",
-    # Узбекистан
-    "tashkent": "Ташкент",
-    "samarkand": "Самарканд",
-    "bukhara": "Бухара",
-    # Кыргызстан
-    "bishkek": "Бишкек",
-    "osh": "Ош",
-    # Другие
-    "dubai": "Дубай",
-    "istanbul": "Стамбул",
-    "antalya": "Анталья",
-    "bali": "Бали",
-    "bangkok": "Бангкок",
-    "london": "Лондон",
-    "paris": "Париж",
-    "new york": "Нью-Йорк",
-    "los angeles": "Лос-Анджелес",
-    "berlin": "Берлин",
-    "rome": "Рим",
-    "barcelona": "Барселона",
-    "milan": "Милан",
-    "tokyo": "Токио",
-    "seoul": "Сеул",
-    "beijing": "Пекин",
-    "shanghai": "Шанхай",
+    "saint petersburg": "Санкт-Петербург",
 }
-
-_VALID_RUSSIAN_CITIES: frozenset[str] = frozenset(CITY_NORMALIZE.values())
 
 # Null-значения для городов
 _CITY_NULL_VALUES: frozenset[str] = frozenset({
     "unknown", "не указано", "неизвестно", "n/a", "none", "-", "—",
 })
 
+# Значения, которые GPT путает с городом (страны, регионы)
+_CITY_INVALID_VALUES: frozenset[str] = frozenset({
+    "казахстан", "kazakhstan", "россия", "russia", "узбекистан", "uzbekistan",
+    "кыргызстан", "kyrgyzstan", "международный", "online",
+})
 
-def normalize_city(city: str | None) -> str | None:
-    """Нормализовать город к русскому названию."""
+
+def build_city_map(cities_data: list[dict[str, object]]) -> dict[str, str]:
+    """Построить маппинг {lowercase_variant: русское_название} из данных таблицы cities.
+
+    cities_data — результат SELECT id, name, ascii_name, l10n FROM cities.
+    Индексирует по name, ascii_name, l10n.en, l10n.kk, l10n.ru.
+    Русское название берётся из l10n.ru, или name как fallback.
+    """
+    city_map: dict[str, str] = {}
+
+    for c in cities_data:
+        l10n = c.get("l10n")
+        if not isinstance(l10n, dict):
+            continue
+
+        # Русское название — приоритет
+        ru_name = l10n.get("ru")
+        if not isinstance(ru_name, str) or not ru_name:
+            # Fallback на name
+            ru_name = c.get("name")
+            if not isinstance(ru_name, str) or not ru_name:
+                continue
+
+        # Индексируем все варианты → русское название
+        for field in ("name", "ascii_name"):
+            val = c.get(field)
+            if isinstance(val, str) and val:
+                city_map[val.lower()] = ru_name
+
+        for lang_name in l10n.values():
+            if isinstance(lang_name, str) and lang_name:
+                city_map[lang_name.lower()] = ru_name
+
+    # Добавляем алиасы (исторические названия, опечатки)
+    city_map.update(_CITY_EXTRA_ALIASES)
+
+    return city_map
+
+
+def normalize_city(city: str | None, city_map: dict[str, str] | None = None) -> str | None:
+    """Нормализовать город к русскому названию.
+
+    city_map — маппинг из build_city_map(). Если None, работает только очистка.
+    """
     if not city:
         return None
 
-    # Убираем суффиксы вроде ", Kazakhstan", ", Kazakstan"
     cleaned = city.strip().rstrip("?.!,;:")
     if not cleaned:
         return None
@@ -402,31 +355,42 @@ def normalize_city(city: str | None) -> str | None:
     if cleaned.lower() in _CITY_NULL_VALUES:
         return None
 
+    # GPT иногда пишет страну вместо города
+    if cleaned.lower() in _CITY_INVALID_VALUES:
+        return None
+
     # Убираем ", Country" суффикс ("Almaty, Kazakhstan" → "Almaty")
     if ", " in cleaned:
         cleaned = cleaned.split(",")[0].strip()
 
+    # Убираем скобки ("Almaty (Kazakhstan)" → "Almaty")
+    if "(" in cleaned:
+        cleaned = cleaned.split("(")[0].strip()
+
+    if not city_map:
+        return cleaned
+
     key = cleaned.lower()
-    if key in CITY_NORMALIZE:
-        return CITY_NORMALIZE[key]
+    if key in city_map:
+        return city_map[key]
 
     # Фикс смешанных алфавитов
     fixed = _fix_mixed_alphabet(cleaned)
     if fixed != cleaned:
         fixed_key = fixed.lower()
-        if fixed_key in CITY_NORMALIZE:
-            return CITY_NORMALIZE[fixed_key]
-        if fixed in _VALID_RUSSIAN_CITIES:
-            return fixed
+        if fixed_key in city_map:
+            return city_map[fixed_key]
 
-    if cleaned in _VALID_RUSSIAN_CITIES:
+    # Валидное русское название (уже в маппинге как значение)
+    valid_russian = frozenset(city_map.values())
+    if cleaned in valid_russian:
         return cleaned
 
-    # Fuzzy только для латиницы
+    # Fuzzy для латиницы
     if cleaned.isascii():
-        matches = get_close_matches(key, CITY_NORMALIZE.keys(), n=1, cutoff=0.8)
+        matches = get_close_matches(key, city_map.keys(), n=1, cutoff=0.8)
         if matches:
-            result = CITY_NORMALIZE[matches[0]]
+            result = city_map[matches[0]]
             logger.debug(f"[normalize] city fuzzy: '{cleaned}' -> '{result}' (matched '{matches[0]}')")
             return result
 
