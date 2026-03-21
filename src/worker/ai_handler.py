@@ -4,13 +4,14 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 from loguru import logger
 from openai import AsyncOpenAI
 from supabase import AsyncClient
 
 import src.worker.handlers as _h
+from src.ai.normalize import deduplicate_list, normalize_country, normalize_posting_frequency
 from src.ai.schemas import AIInsights
 from src.ai.taxonomy_matching import (
     is_valid_city,
@@ -462,291 +463,11 @@ def _dedup_brands(brands: list[str]) -> list[str]:
     return unique
 
 
-# Маппинг стран → русские названия (lowercase ключи)
-# Включает: ISO-коды, английские/нативные названия, частые опечатки GPT
-_COUNTRY_NORMALIZE: dict[str, str] = {
-    # Казахстан — все варианты
-    "kazakhstan": "Казахстан",
-    "kazahstan": "Казахстан",
-    "kazakstan": "Казахстан",
-    "kazakhtan": "Казахстан",
-    "kazakistan": "Казахстан",
-    "republic of kazakhstan": "Казахстан",
-    "qazaqstan": "Казахстан",
-    "қазақстан": "Казахстан",
-    "kz": "Казахстан",
-    # Россия
-    "russia": "Россия",
-    "russian federation": "Россия",
-    "россия": "Россия",
-    "рф": "Россия",
-    "ru": "Россия",
-    # Узбекистан
-    "uzbekistan": "Узбекистан",
-    "uzbekstan": "Узбекистан",
-    "republic of uzbekistan": "Узбекистан",
-    "ўзбекистон": "Узбекистан",
-    "o'zbekiston": "Узбекистан",
-    "uz": "Узбекистан",
-    # Кыргызстан
-    "kyrgyzstan": "Кыргызстан",
-    "kirgizstan": "Кыргызстан",
-    "kirgizia": "Кыргызстан",
-    "kyrgyz republic": "Кыргызстан",
-    "кыргызстан": "Кыргызстан",
-    "kg": "Кыргызстан",
-    # Таджикистан
-    "tajikistan": "Таджикистан",
-    "tadzhikistan": "Таджикистан",
-    "republic of tajikistan": "Таджикистан",
-    "tj": "Таджикистан",
-    # Туркменистан
-    "turkmenistan": "Туркменистан",
-    "tm": "Туркменистан",
-    # Азербайджан
-    "azerbaijan": "Азербайджан",
-    "azerbaidjan": "Азербайджан",
-    "az": "Азербайджан",
-    # Грузия
-    "georgia": "Грузия",
-    "ge": "Грузия",
-    # Армения
-    "armenia": "Армения",
-    "am": "Армения",
-    # Турция
-    "turkey": "Турция",
-    "türkiye": "Турция",
-    "turkiye": "Турция",
-    "tr": "Турция",
-    # Ближний Восток
-    "uae": "ОАЭ",
-    "united arab emirates": "ОАЭ",
-    "оаэ": "ОАЭ",
-    "ae": "ОАЭ",
-    "qatar": "Катар",
-    "qa": "Катар",
-    "saudi arabia": "Саудовская Аравия",
-    "sa": "Саудовская Аравия",
-    "bahrain": "Бахрейн",
-    "israel": "Израиль",
-    "il": "Израиль",
-    # Азия
-    "china": "Китай",
-    "cn": "Китай",
-    "south korea": "Южная Корея",
-    "korea": "Южная Корея",
-    "kr": "Южная Корея",
-    "japan": "Япония",
-    "jp": "Япония",
-    "india": "Индия",
-    "in": "Индия",
-    "malaysia": "Малайзия",
-    "my": "Малайзия",
-    "thailand": "Таиланд",
-    "th": "Таиланд",
-    "indonesia": "Индонезия",
-    "id": "Индонезия",
-    "singapore": "Сингапур",
-    "sg": "Сингапур",
-    "mongolia": "Монголия",
-    "mn": "Монголия",
-    # Европа
-    "usa": "США",
-    "united states": "США",
-    "united states of america": "США",
-    "us": "США",
-    "uk": "Великобритания",
-    "united kingdom": "Великобритания",
-    "great britain": "Великобритания",
-    "england": "Великобритания",
-    "gb": "Великобритания",
-    "germany": "Германия",
-    "de": "Германия",
-    "france": "Франция",
-    "fr": "Франция",
-    "italy": "Италия",
-    "it": "Италия",
-    "spain": "Испания",
-    "es": "Испания",
-    "canada": "Канада",
-    "ca": "Канада",
-    "australia": "Австралия",
-    "au": "Австралия",
-    "poland": "Польша",
-    "pl": "Польша",
-    "czech republic": "Чехия",
-    "czechia": "Чехия",
-    "cz": "Чехия",
-    "netherlands": "Нидерланды",
-    "nl": "Нидерланды",
-    "belgium": "Бельгия",
-    "austria": "Австрия",
-    "at": "Австрия",
-    "switzerland": "Швейцария",
-    "ch": "Швейцария",
-    "sweden": "Швеция",
-    "se": "Швеция",
-    "norway": "Норвегия",
-    "finland": "Финляндия",
-    "denmark": "Дания",
-    "portugal": "Португалия",
-    "greece": "Греция",
-    "hungary": "Венгрия",
-    "romania": "Румыния",
-    "bulgaria": "Болгария",
-    "serbia": "Сербия",
-    "croatia": "Хорватия",
-    # СНГ / Восточная Европа
-    "ukraine": "Украина",
-    "ua": "Украина",
-    "belarus": "Беларусь",
-    "by": "Беларусь",
-    "moldova": "Молдова",
-    "md": "Молдова",
-    "latvia": "Латвия",
-    "lithuania": "Литва",
-    "estonia": "Эстония",
-    # Африка / Латинская Америка
-    "egypt": "Египет",
-    "eg": "Египет",
-    "morocco": "Марокко",
-    "tunisia": "Тунис",
-    "south africa": "ЮАР",
-    "brazil": "Бразилия",
-    "br": "Бразилия",
-    "mexico": "Мексика",
-    "mx": "Мексика",
-    "argentina": "Аргентина",
-    # Кириллические варианты и синонимы
-    "киргизия": "Кыргызстан",
-    "объединённые арабские эмираты": "ОАЭ",
-    "объединенные арабские эмираты": "ОАЭ",
-    "эмираты": "ОАЭ",
-    "вьетнам": "Вьетнам",
-    "иран": "Иран",
-    "ирак": "Ирак",
-    "пакистан": "Пакистан",
-    "непал": "Непал",
-    "шри-ланка": "Шри-Ланка",
-}
-
-# Значения, которые нужно превратить в null (GPT иногда пишет "unknown")
-_COUNTRY_NULL_VALUES: frozenset[str] = frozenset({
-    "unknown", "не указано", "неизвестно", "n/a", "none", "-", "—",
-})
-
-# Множество валидных русских названий — если уже на русском, не трогаем
-_VALID_RUSSIAN_COUNTRIES: frozenset[str] = frozenset(_COUNTRY_NORMALIZE.values())
-
-# Замена латинских символов-двойников на кириллицу (GPT иногда мешает алфавиты)
-_LATIN_TO_CYRILLIC: dict[str, str] = {
-    "a": "а", "c": "с", "e": "е", "o": "о", "p": "р",
-    "x": "х", "y": "у", "k": "к", "h": "н",
-}
-
-
-def _fix_mixed_alphabet(text: str) -> str:
-    """Заменить латинские символы-двойники на кириллицу в кириллической строке."""
-    # Если строка преимущественно кириллическая — фиксим латинские вкрапления
-    cyrillic_count = sum(1 for ch in text if "\u0400" <= ch <= "\u04ff")
-    if cyrillic_count < len(text) * 0.5:
-        return text
-    return "".join(_LATIN_TO_CYRILLIC.get(ch, ch) for ch in text)
-
-
-def _normalize_country(country: str | None) -> str | None:
-    """Нормализовать страну к русскому названию.
-
-    Стратегия:
-    1. Очистка: strip, убрать знаки препинания, null-значения
-    2. Точное совпадение по словарю (lowercase)
-    3. Фикс смешанных алфавитов (латинская "c" в кириллице) → повторный поиск
-    4. Если уже валидное русское название — оставить
-    5. Fuzzy-поиск по ключам словаря (ловим опечатки)
-    6. Иначе вернуть как есть
-    """
-    if not country:
-        return None
-
-    # 1. Очистка
-    cleaned = country.strip().rstrip("?.!,;:")
-    if not cleaned:
-        return None
-
-    # Null-значения → None
-    if cleaned.lower() in _COUNTRY_NULL_VALUES:
-        return None
-
-    # 2. Точное совпадение (lowercase)
-    key = cleaned.lower()
-    if key in _COUNTRY_NORMALIZE:
-        return _COUNTRY_NORMALIZE[key]
-
-    # 3. Фикс смешанных алфавитов ("Казахcтан" с латинской c → "Казахстан")
-    fixed = _fix_mixed_alphabet(cleaned)
-    if fixed != cleaned:
-        fixed_key = fixed.lower()
-        if fixed_key in _COUNTRY_NORMALIZE:
-            return _COUNTRY_NORMALIZE[fixed_key]
-        # Проверяем как валидное русское название
-        if fixed in _VALID_RUSSIAN_COUNTRIES:
-            return fixed
-
-    # 4. Уже валидное русское название
-    if cleaned in _VALID_RUSSIAN_COUNTRIES:
-        return cleaned
-
-    # 5. Fuzzy-поиск (ловим опечатки)
-    from difflib import get_close_matches
-
-    matches = get_close_matches(key, _COUNTRY_NORMALIZE.keys(), n=1, cutoff=0.75)
-    if matches:
-        result = _COUNTRY_NORMALIZE[matches[0]]
-        logger.debug(
-            f"[normalize] country fuzzy: '{cleaned}' -> '{result}' "
-            f"(matched '{matches[0]}')"
-        )
-        return result
-
-    # 4. Вернуть как есть
-    return cleaned
-
-
-_PostingFrequency = Literal["rare", "weekly", "several_per_week", "daily"]
-
-
-def _normalize_posting_frequency(
-    ai_freq: _PostingFrequency | None,
-    posts_per_week: float | None,
-) -> _PostingFrequency | None:
-    """Переопределить posting_frequency по фактическому posts_per_week."""
-    if posts_per_week is None:
-        return ai_freq
-    if posts_per_week < 0.5:
-        return "rare"
-    if posts_per_week < 1.5:
-        return "weekly"
-    if posts_per_week < 5:
-        return "several_per_week"
-    return "daily"
-
-
-def _deduplicate_list(items: list[str]) -> list[str]:
-    """Дедупликация списка строк с сохранением порядка."""
-    seen: set[str] = set()
-    result: list[str] = []
-    for item in items:
-        if item not in seen:
-            seen.add(item)
-            result.append(item)
-    return result
-
-
 def _normalize_insights(insights: AIInsights, posts_per_week: float | None) -> None:
     """Постпроцессинг AIInsights: нормализация и дедупликация полей."""
     # Нормализация страны к русскому
     if insights.blogger_profile.country:
-        normalized = _normalize_country(insights.blogger_profile.country)
+        normalized = normalize_country(insights.blogger_profile.country)
         if normalized != insights.blogger_profile.country:
             logger.debug(
                 f"[normalize] country: '{insights.blogger_profile.country}' -> '{normalized}'"
@@ -755,7 +476,7 @@ def _normalize_insights(insights: AIInsights, posts_per_week: float | None) -> N
 
     # Переопределение posting_frequency по фактическому posts_per_week
     original_freq = insights.content.posting_frequency
-    corrected_freq = _normalize_posting_frequency(original_freq, posts_per_week)
+    corrected_freq = normalize_posting_frequency(original_freq, posts_per_week)
     if corrected_freq != original_freq:
         logger.debug(
             f"[normalize] posting_frequency: '{original_freq}' -> '{corrected_freq}' "
@@ -764,39 +485,39 @@ def _normalize_insights(insights: AIInsights, posts_per_week: float | None) -> N
         insights.content.posting_frequency = corrected_freq
 
     # Дедупликация списков в marketing_value
-    insights.marketing_value.best_fit_industries = _deduplicate_list(
+    insights.marketing_value.best_fit_industries = deduplicate_list(
         insights.marketing_value.best_fit_industries
     )
-    insights.marketing_value.not_suitable_for = _deduplicate_list(
+    insights.marketing_value.not_suitable_for = deduplicate_list(
         insights.marketing_value.not_suitable_for
     )
-    insights.marketing_value.values_and_causes = _deduplicate_list(
+    insights.marketing_value.values_and_causes = deduplicate_list(
         insights.marketing_value.values_and_causes
     )
 
     # Дедупликация в audience
-    insights.audience_inference.geo_mentions = _deduplicate_list(
+    insights.audience_inference.geo_mentions = deduplicate_list(
         insights.audience_inference.geo_mentions
     )
-    insights.audience_inference.audience_interests = _deduplicate_list(
+    insights.audience_inference.audience_interests = deduplicate_list(
         insights.audience_inference.audience_interests
     )
 
     # Дедупликация в content
-    insights.content.content_language = _deduplicate_list(
+    insights.content.content_language = deduplicate_list(
         insights.content.content_language
     )
 
     # Дедупликация в commercial
-    insights.commercial.detected_brand_categories = _deduplicate_list(
+    insights.commercial.detected_brand_categories = deduplicate_list(
         insights.commercial.detected_brand_categories
     )
 
     # Дедупликация остальных списков
-    insights.blogger_profile.speaks_languages = _deduplicate_list(
+    insights.blogger_profile.speaks_languages = deduplicate_list(
         insights.blogger_profile.speaks_languages
     )
-    insights.lifestyle.pet_types = _deduplicate_list(
+    insights.lifestyle.pet_types = deduplicate_list(
         insights.lifestyle.pet_types
     )
 

@@ -22,10 +22,9 @@ from typing import Any, cast
 from loguru import logger
 from supabase import create_async_client
 
+# Нормализация страны — единый источник в src.ai.normalize
+from src.ai.normalize import normalize_country
 from src.config import load_settings
-
-# Нормализация страны — единый источник в ai_handler
-from src.worker.ai_handler import _normalize_country
 
 # Паттерн для удаления префиксов индустрий
 _PREFIX_RE = re.compile(r"^(?:п[oо]дх[oо]дит для |не подходит для )", re.IGNORECASE)
@@ -72,7 +71,7 @@ def _fix_insights(insights: dict[str, Any], ppw: float | None) -> tuple[dict[str
     if isinstance(bp, dict):
         country = bp.get("country")
         if country and isinstance(country, str):
-            normalized = _normalize_country(country)
+            normalized = normalize_country(country)
             if normalized and normalized != country:
                 bp["country"] = normalized
                 changes.append(f"country: '{country}' → '{normalized}'")
