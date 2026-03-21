@@ -11,7 +11,12 @@ from openai import AsyncOpenAI
 from supabase import AsyncClient
 
 import src.worker.handlers as _h
-from src.ai.normalize import deduplicate_list, normalize_country, normalize_posting_frequency
+from src.ai.normalize import (
+    deduplicate_list,
+    normalize_city,
+    normalize_country,
+    normalize_posting_frequency,
+)
 from src.ai.schemas import AIInsights
 from src.ai.taxonomy_matching import (
     is_valid_city,
@@ -473,6 +478,15 @@ def _normalize_insights(insights: AIInsights, posts_per_week: float | None) -> N
                 f"[normalize] country: '{insights.blogger_profile.country}' -> '{normalized}'"
             )
             insights.blogger_profile.country = normalized
+
+    # Нормализация города к русскому
+    if insights.blogger_profile.city:
+        normalized_city = normalize_city(insights.blogger_profile.city)
+        if normalized_city != insights.blogger_profile.city:
+            logger.debug(
+                f"[normalize] city: '{insights.blogger_profile.city}' -> '{normalized_city}'"
+            )
+            insights.blogger_profile.city = normalized_city
 
     # Переопределение posting_frequency по фактическому posts_per_week
     original_freq = insights.content.posting_frequency

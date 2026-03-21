@@ -180,11 +180,28 @@ COUNTRY_NORMALIZE: dict[str, str] = {
     "morocco": "Марокко",
     "tunisia": "Тунис",
     "south africa": "ЮАР",
+    # Дополнительные русские варианты
+    "корея": "Южная Корея",
+    "ливан": "Ливан",
+    "португалия": "Португалия",
+    "нидерланды": "Нидерланды",
+    "бельгия": "Бельгия",
+    "австрия": "Австрия",
+    "норвегия": "Норвегия",
+    "финляндия": "Финляндия",
+    "дания": "Дания",
+    "венгрия": "Венгрия",
+    "румыния": "Румыния",
+    "болгария": "Болгария",
+    "сербия": "Сербия",
+    "хорватия": "Хорватия",
+    "греция": "Греция",
 }
 
 # Значения → null
 _COUNTRY_NULL_VALUES: frozenset[str] = frozenset({
     "unknown", "не указано", "неизвестно", "n/a", "none", "-", "—",
+    "международный", "не определено", "не установлено",
 })
 
 # Валидные русские названия
@@ -214,6 +231,11 @@ def normalize_country(country: str | None) -> str | None:
     if not cleaned:
         return None
 
+    # Убираем пояснения в скобках: "Kazakhstan (likely)" → "Kazakhstan"
+    if "(" in cleaned:
+        cleaned = cleaned.split("(")[0].strip()
+
+    # Убираем суффикс после запятой: "Almaty, Kazakhstan" → первую часть не трогаем (это для city)
     if cleaned.lower() in _COUNTRY_NULL_VALUES:
         return None
 
@@ -237,6 +259,176 @@ def normalize_country(country: str | None) -> str | None:
         result = COUNTRY_NORMALIZE[matches[0]]
         logger.debug(f"[normalize] country fuzzy: '{cleaned}' -> '{result}' (matched '{matches[0]}')")
         return result
+
+    return cleaned
+
+
+# ---------------------------------------------------------------------------
+# City нормализация
+# ---------------------------------------------------------------------------
+
+# Казахстанские города: английские/нестандартные → русские
+CITY_NORMALIZE: dict[str, str] = {
+    # Алматы
+    "almaty": "Алматы",
+    "alma-ata": "Алматы",
+    "alma ata": "Алматы",
+    "алма-ата": "Алматы",
+    "алмата": "Алматы",
+    # Астана
+    "astana": "Астана",
+    "nur-sultan": "Астана",
+    "nursultan": "Астана",
+    "нур-султан": "Астана",
+    # Шымкент
+    "shymkent": "Шымкент",
+    "chimkent": "Шымкент",
+    "чимкент": "Шымкент",
+    # Караганда
+    "karaganda": "Караганда",
+    "karagandy": "Караганда",
+    "qaragandy": "Караганда",
+    # Актобе
+    "aktobe": "Актобе",
+    "aqtobe": "Актобе",
+    "aktobe city": "Актобе",
+    "актюбинск": "Актобе",
+    # Актау
+    "aktau": "Актау",
+    "aqtau": "Актау",
+    # Атырау
+    "atyrau": "Атырау",
+    # Тараз
+    "taraz": "Тараз",
+    "жамбыл": "Тараз",
+    # Павлодар
+    "pavlodar": "Павлодар",
+    # Усть-Каменогорск
+    "ust-kamenogorsk": "Усть-Каменогорск",
+    "oskemen": "Усть-Каменогорск",
+    "öskemen": "Усть-Каменогорск",
+    # Семей
+    "semey": "Семей",
+    "semipalatinsk": "Семей",
+    "семипалатинск": "Семей",
+    # Кызылорда
+    "kyzylorda": "Кызылорда",
+    "qyzylorda": "Кызылорда",
+    # Костанай
+    "kostanay": "Костанай",
+    "kostanai": "Костанай",
+    "qostanay": "Костанай",
+    "кустанай": "Костанай",
+    # Уральск
+    "uralsk": "Уральск",
+    "oral": "Уральск",
+    # Петропавловск
+    "petropavlovsk": "Петропавловск",
+    # Кокшетау
+    "kokshetau": "Кокшетау",
+    "kökshetau": "Кокшетау",
+    # Талдыкорган
+    "taldykorgan": "Талдыкорган",
+    # Туркестан
+    "turkestan": "Туркестан",
+    "turkistan": "Туркестан",
+    # Экибастуз
+    "ekibastuz": "Экибастуз",
+    # Степногорск
+    "stepnogorsk": "Степногорск",
+    # Темиртау
+    "temirtau": "Темиртау",
+    # Жанаозен
+    "zhanaozen": "Жанаозен",
+    # Балхаш
+    "balkhash": "Балхаш",
+    # Байконур
+    "baikonur": "Байконур",
+    # Россия
+    "moscow": "Москва",
+    "saint petersburg": "Санкт-Петербург",
+    "st petersburg": "Санкт-Петербург",
+    "st. petersburg": "Санкт-Петербург",
+    "novosibirsk": "Новосибирск",
+    "yekaterinburg": "Екатеринбург",
+    "kazan": "Казань",
+    "krasnoyarsk": "Красноярск",
+    "sochi": "Сочи",
+    # Узбекистан
+    "tashkent": "Ташкент",
+    "samarkand": "Самарканд",
+    "bukhara": "Бухара",
+    # Кыргызстан
+    "bishkek": "Бишкек",
+    "osh": "Ош",
+    # Другие
+    "dubai": "Дубай",
+    "istanbul": "Стамбул",
+    "antalya": "Анталья",
+    "bali": "Бали",
+    "bangkok": "Бангкок",
+    "london": "Лондон",
+    "paris": "Париж",
+    "new york": "Нью-Йорк",
+    "los angeles": "Лос-Анджелес",
+    "berlin": "Берлин",
+    "rome": "Рим",
+    "barcelona": "Барселона",
+    "milan": "Милан",
+    "tokyo": "Токио",
+    "seoul": "Сеул",
+    "beijing": "Пекин",
+    "shanghai": "Шанхай",
+}
+
+_VALID_RUSSIAN_CITIES: frozenset[str] = frozenset(CITY_NORMALIZE.values())
+
+# Null-значения для городов
+_CITY_NULL_VALUES: frozenset[str] = frozenset({
+    "unknown", "не указано", "неизвестно", "n/a", "none", "-", "—",
+})
+
+
+def normalize_city(city: str | None) -> str | None:
+    """Нормализовать город к русскому названию."""
+    if not city:
+        return None
+
+    # Убираем суффиксы вроде ", Kazakhstan", ", Kazakstan"
+    cleaned = city.strip().rstrip("?.!,;:")
+    if not cleaned:
+        return None
+
+    if cleaned.lower() in _CITY_NULL_VALUES:
+        return None
+
+    # Убираем ", Country" суффикс ("Almaty, Kazakhstan" → "Almaty")
+    if ", " in cleaned:
+        cleaned = cleaned.split(",")[0].strip()
+
+    key = cleaned.lower()
+    if key in CITY_NORMALIZE:
+        return CITY_NORMALIZE[key]
+
+    # Фикс смешанных алфавитов
+    fixed = _fix_mixed_alphabet(cleaned)
+    if fixed != cleaned:
+        fixed_key = fixed.lower()
+        if fixed_key in CITY_NORMALIZE:
+            return CITY_NORMALIZE[fixed_key]
+        if fixed in _VALID_RUSSIAN_CITIES:
+            return fixed
+
+    if cleaned in _VALID_RUSSIAN_CITIES:
+        return cleaned
+
+    # Fuzzy только для латиницы
+    if cleaned.isascii():
+        matches = get_close_matches(key, CITY_NORMALIZE.keys(), n=1, cutoff=0.8)
+        if matches:
+            result = CITY_NORMALIZE[matches[0]]
+            logger.debug(f"[normalize] city fuzzy: '{cleaned}' -> '{result}' (matched '{matches[0]}')")
+            return result
 
     return cleaned
 

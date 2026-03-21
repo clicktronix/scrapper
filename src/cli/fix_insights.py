@@ -23,7 +23,7 @@ from loguru import logger
 from supabase import create_async_client
 
 # Нормализация страны — единый источник в src.ai.normalize
-from src.ai.normalize import normalize_country
+from src.ai.normalize import normalize_city, normalize_country
 from src.config import load_settings
 
 # Паттерн для удаления префиксов индустрий
@@ -75,6 +75,15 @@ def _fix_insights(insights: dict[str, Any], ppw: float | None) -> tuple[dict[str
             if normalized and normalized != country:
                 bp["country"] = normalized
                 changes.append(f"country: '{country}' → '{normalized}'")
+
+    # 1b. City нормализация
+    if isinstance(bp, dict):
+        city = bp.get("city")
+        if city and isinstance(city, str):
+            normalized_city = normalize_city(city)
+            if normalized_city and normalized_city != city:
+                bp["city"] = normalized_city
+                changes.append(f"city: '{city}' → '{normalized_city}'")
 
     # 2. posting_frequency коррекция
     content = insights.get("content", {})
