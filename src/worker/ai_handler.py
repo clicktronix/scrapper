@@ -617,46 +617,96 @@ _COUNTRY_NORMALIZE: dict[str, str] = {
     "mexico": "Мексика",
     "mx": "Мексика",
     "argentina": "Аргентина",
+    # Кириллические варианты и синонимы
+    "киргизия": "Кыргызстан",
+    "объединённые арабские эмираты": "ОАЭ",
+    "объединенные арабские эмираты": "ОАЭ",
+    "эмираты": "ОАЭ",
+    "вьетнам": "Вьетнам",
+    "иран": "Иран",
+    "ирак": "Ирак",
+    "пакистан": "Пакистан",
+    "непал": "Непал",
+    "шри-ланка": "Шри-Ланка",
 }
+
+# Значения, которые нужно превратить в null (GPT иногда пишет "unknown")
+_COUNTRY_NULL_VALUES: frozenset[str] = frozenset({
+    "unknown", "не указано", "неизвестно", "n/a", "none", "-", "—",
+})
 
 # Множество валидных русских названий — если уже на русском, не трогаем
 _VALID_RUSSIAN_COUNTRIES: frozenset[str] = frozenset(_COUNTRY_NORMALIZE.values())
+
+# Замена латинских символов-двойников на кириллицу (GPT иногда мешает алфавиты)
+_LATIN_TO_CYRILLIC: dict[str, str] = {
+    "a": "а", "c": "с", "e": "е", "o": "о", "p": "р",
+    "x": "х", "y": "у", "k": "к", "h": "н",
+}
+
+
+def _fix_mixed_alphabet(text: str) -> str:
+    """Заменить латинские символы-двойники на кириллицу в кириллической строке."""
+    # Если строка преимущественно кириллическая — фиксим латинские вкрапления
+    cyrillic_count = sum(1 for ch in text if "\u0400" <= ch <= "\u04ff")
+    if cyrillic_count < len(text) * 0.5:
+        return text
+    return "".join(_LATIN_TO_CYRILLIC.get(ch, ch) for ch in text)
 
 
 def _normalize_country(country: str | None) -> str | None:
     """Нормализовать страну к русскому названию.
 
     Стратегия:
-    1. Точное совпадение по словарю (lowercase)
-    2. Если уже валидное русское название — оставить
-    3. Если строка на латинице — попробовать fuzzy-поиск по ключам словаря
-    4. Иначе вернуть как есть (может быть корректное русское название не из словаря)
+    1. Очистка: strip, убрать знаки препинания, null-значения
+    2. Точное совпадение по словарю (lowercase)
+    3. Фикс смешанных алфавитов (латинская "c" в кириллице) → повторный поиск
+    4. Если уже валидное русское название — оставить
+    5. Fuzzy-поиск по ключам словаря (ловим опечатки)
+    6. Иначе вернуть как есть
     """
     if not country:
         return None
 
-    cleaned = country.strip()
+    # 1. Очистка
+    cleaned = country.strip().rstrip("?.!,;:")
     if not cleaned:
         return None
 
-    # 1. Точное совпадение
+    # Null-значения → None
+    if cleaned.lower() in _COUNTRY_NULL_VALUES:
+        return None
+
+    # 2. Точное совпадение (lowercase)
     key = cleaned.lower()
     if key in _COUNTRY_NORMALIZE:
         return _COUNTRY_NORMALIZE[key]
 
-    # 2. Уже валидное русское название
+    # 3. Фикс смешанных алфавитов ("Казахcтан" с латинской c → "Казахстан")
+    fixed = _fix_mixed_alphabet(cleaned)
+    if fixed != cleaned:
+        fixed_key = fixed.lower()
+        if fixed_key in _COUNTRY_NORMALIZE:
+            return _COUNTRY_NORMALIZE[fixed_key]
+        # Проверяем как валидное русское название
+        if fixed in _VALID_RUSSIAN_COUNTRIES:
+            return fixed
+
+    # 4. Уже валидное русское название
     if cleaned in _VALID_RUSSIAN_COUNTRIES:
         return cleaned
 
-    # 3. Fuzzy-поиск для латиницы (ловим опечатки вроде "Kazakhsan", "Uzbekstan")
-    if cleaned.isascii():
-        from difflib import get_close_matches
+    # 5. Fuzzy-поиск (ловим опечатки)
+    from difflib import get_close_matches
 
-        matches = get_close_matches(key, _COUNTRY_NORMALIZE.keys(), n=1, cutoff=0.8)
-        if matches:
-            result = _COUNTRY_NORMALIZE[matches[0]]
-            logger.debug(f"[normalize] country fuzzy: '{cleaned}' -> '{result}' (matched '{matches[0]}')")
-            return result
+    matches = get_close_matches(key, _COUNTRY_NORMALIZE.keys(), n=1, cutoff=0.75)
+    if matches:
+        result = _COUNTRY_NORMALIZE[matches[0]]
+        logger.debug(
+            f"[normalize] country fuzzy: '{cleaned}' -> '{result}' "
+            f"(matched '{matches[0]}')"
+        )
+        return result
 
     # 4. Вернуть как есть
     return cleaned
