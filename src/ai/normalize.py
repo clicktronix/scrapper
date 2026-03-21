@@ -441,9 +441,9 @@ PostingFrequency = Literal["rare", "weekly", "several_per_week", "daily"]
 
 
 def normalize_posting_frequency(
-    ai_freq: str | None,
+    ai_freq: PostingFrequency | None,
     posts_per_week: float | None,
-) -> str | None:
+) -> PostingFrequency | None:
     """Переопределить posting_frequency по фактическому posts_per_week."""
     if posts_per_week is None:
         return ai_freq

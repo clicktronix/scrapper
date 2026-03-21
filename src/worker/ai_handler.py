@@ -78,15 +78,17 @@ class BatchContext:
     categories_cache: dict[str, str]
     tags_cache: dict[str, str]
     cities_cache: dict[str, str]
-    taxonomy_metrics: dict[str, int] = field(default_factory=lambda: {
-        "categories_total": 0,
-        "categories_matched": 0,
-        "categories_unmatched": 0,
-        "tags_total": 0,
-        "tags_matched": 0,
-        "tags_unmatched": 0,
-        "taxonomy_errors": 0,
-    })
+    taxonomy_metrics: dict[str, int] = field(
+        default_factory=lambda: {
+            "categories_total": 0,
+            "categories_matched": 0,
+            "categories_unmatched": 0,
+            "tags_total": 0,
+            "tags_matched": 0,
+            "tags_unmatched": 0,
+            "taxonomy_errors": 0,
+        }
+    )
     # Накапливаем embedding задачи для параллельного выполнения
     pending_embeddings: list[tuple[str, str]] = field(default_factory=lambda: [])
 
@@ -162,12 +164,10 @@ async def _load_profiles_for_batch(
 
     # Батчевая загрузка всех данных (3 запроса вместо N*3)
     blogs_result = await db.table("blogs").select("*").in_("id", blog_ids).execute()
-    posts_result = await db.table("blog_posts").select("*").in_(
-        "blog_id", blog_ids
-    ).order("taken_at", desc=True).execute()
-    highlights_result = await db.table("blog_highlights").select("*").in_(
-        "blog_id", blog_ids
-    ).execute()
+    posts_result = (
+        await db.table("blog_posts").select("*").in_("blog_id", blog_ids).order("taken_at", desc=True).execute()
+    )
+    highlights_result = await db.table("blog_highlights").select("*").in_("blog_id", blog_ids).execute()
 
     # Индексация по blog_id
     blog_rows = cast(list[dict[str, Any]], blogs_result.data or [])
@@ -191,8 +191,12 @@ async def _load_profiles_for_batch(
 
         if not blog:
             await _h.mark_task_failed(
-                db, pt["id"], pt.get("attempts", 0), pt.get("max_attempts", 3),
-                f"Blog {blog_id} not found in database", retry=False,
+                db,
+                pt["id"],
+                pt.get("attempts", 0),
+                pt.get("max_attempts", 3),
+                f"Blog {blog_id} not found in database",
+                retry=False,
             )
             failed_task_ids.append(pt["id"])
             continue
@@ -246,17 +250,19 @@ async def _load_profiles_for_batch(
         for h in raw_highlights:
             if not h.get("platform_id") or not h.get("title"):
                 continue
-            highlights.append(ScrapedHighlight(
-                platform_id=h["platform_id"],
-                title=h["title"],
-                media_count=h.get("media_count", 0),
-                story_mentions=h.get("story_mentions", []),
-                story_locations=h.get("story_locations", []),
-                story_links=h.get("story_links", []),
-                story_sponsor_tags=h.get("story_sponsor_tags", []),
-                has_paid_partnership=h.get("has_paid_partnership", False),
-                story_hashtags=h.get("story_hashtags", []),
-            ))
+            highlights.append(
+                ScrapedHighlight(
+                    platform_id=h["platform_id"],
+                    title=h["title"],
+                    media_count=h.get("media_count", 0),
+                    story_mentions=h.get("story_mentions", []),
+                    story_locations=h.get("story_locations", []),
+                    story_links=h.get("story_links", []),
+                    story_sponsor_tags=h.get("story_sponsor_tags", []),
+                    has_paid_partnership=h.get("has_paid_partnership", False),
+                    story_hashtags=h.get("story_hashtags", []),
+                )
+            )
 
         # Нормализация bio_links: обратная совместимость со старым форматом ["url"]
         raw_bio_links: list[Any] = cast(list[Any], blog.get("bio_links") or [])
@@ -308,11 +314,15 @@ async def handle_ai_analysis(
     """
     # Считаем pending ai_analysis задачи
     logger.debug("[ai_analysis] Checking pending ai_analysis tasks...")
-    pending_result = await db.table("scrape_tasks").select(
-        "id, blog_id, created_at, attempts, max_attempts, payload"
-    ).eq("task_type", "ai_analysis").eq("status", "pending").order(
-        "created_at", desc=False
-    ).limit(100).execute()
+    pending_result = (
+        await db.table("scrape_tasks")
+        .select("id, blog_id, created_at, attempts, max_attempts, payload")
+        .eq("task_type", "ai_analysis")
+        .eq("status", "pending")
+        .order("created_at", desc=False)
+        .limit(100)
+        .execute()
+    )
     pending_tasks = cast(list[dict[str, Any]], pending_result.data or [])
 
     # Гарантируем что текущая задача включена (защита от гонки с параллельным worker'ом)
@@ -333,10 +343,7 @@ async def handle_ai_analysis(
     else:
         time_triggered = True
 
-    should_submit = (
-        len(pending_tasks) >= settings.batch_min_size
-        or time_triggered
-    )
+    should_submit = len(pending_tasks) >= settings.batch_min_size or time_triggered
 
     if not should_submit:
         logger.debug(
@@ -345,8 +352,10 @@ async def handle_ai_analysis(
         )
         return
 
-    logger.debug(f"[ai_analysis] Submitting batch: {len(pending_tasks)} tasks "
-                 f"(min={settings.batch_min_size}, time_triggered={time_triggered})")
+    logger.debug(
+        f"[ai_analysis] Submitting batch: {len(pending_tasks)} tasks "
+        f"(min={settings.batch_min_size}, time_triggered={time_triggered})"
+    )
 
     # Батчевая загрузка профилей
     profiles, task_ids, _ = await _load_profiles_for_batch(db, pending_tasks)
@@ -382,7 +391,9 @@ async def handle_ai_analysis(
             return
 
         batch_id = await _h.submit_batch(
-            openai_client, claimed_profiles, settings,
+            openai_client,
+            claimed_profiles,
+            settings,
             text_only_ids=text_only_ids,
         )
 
@@ -390,19 +401,21 @@ async def handle_ai_analysis(
         save_failures: list[str] = []
         for tid in claimed_tasks:
             try:
-                existing_payload: dict[str, Any] = cast(
-                    dict[str, Any], pending_by_id.get(tid, {}).get("payload") or {}
-                )
+                existing_payload: dict[str, Any] = cast(dict[str, Any], pending_by_id.get(tid, {}).get("payload") or {})
                 merged_payload: dict[str, Any] = {**existing_payload, "batch_id": batch_id}
-                await db.table("scrape_tasks").update({
-                    "payload": merged_payload,
-                }).eq("id", tid).execute()
+                await (
+                    db.table("scrape_tasks")
+                    .update(
+                        {
+                            "payload": merged_payload,
+                        }
+                    )
+                    .eq("id", tid)
+                    .execute()
+                )
             except Exception as save_err:
                 save_failures.append(tid)
-                logger.error(
-                    f"[ai_analysis] Не удалось сохранить batch_id={batch_id} "
-                    f"в задачу {tid}: {save_err}"
-                )
+                logger.error(f"[ai_analysis] Не удалось сохранить batch_id={batch_id} в задачу {tid}: {save_err}")
 
         if save_failures:
             logger.error(
@@ -430,12 +443,19 @@ async def handle_ai_analysis(
             for tid in claimed_tasks:
                 attempts, _max = claimed_tasks[tid]
                 try:
-                    await db.table("scrape_tasks").update({
-                        "status": "pending",
-                        "attempts": attempts - 1,  # откат mark_task_running
-                        "error_message": _h.sanitize_error(error_str)[:500],
-                        "next_retry_at": next_retry.isoformat(),
-                    }).eq("id", tid).execute()
+                    await (
+                        db.table("scrape_tasks")
+                        .update(
+                            {
+                                "status": "pending",
+                                "attempts": attempts - 1,  # откат mark_task_running
+                                "error_message": _h.sanitize_error(error_str)[:500],
+                                "next_retry_at": next_retry.isoformat(),
+                            }
+                        )
+                        .eq("id", tid)
+                        .execute()
+                    )
                 except Exception as rollback_err:
                     logger.error(f"Failed to return task {tid} to pending: {rollback_err}")
         else:
@@ -474,18 +494,14 @@ def _normalize_insights(insights: AIInsights, posts_per_week: float | None) -> N
     if insights.blogger_profile.country:
         normalized = normalize_country(insights.blogger_profile.country)
         if normalized != insights.blogger_profile.country:
-            logger.debug(
-                f"[normalize] country: '{insights.blogger_profile.country}' -> '{normalized}'"
-            )
+            logger.debug(f"[normalize] country: '{insights.blogger_profile.country}' -> '{normalized}'")
             insights.blogger_profile.country = normalized
 
     # Нормализация города к русскому
     if insights.blogger_profile.city:
         normalized_city = normalize_city(insights.blogger_profile.city)
         if normalized_city != insights.blogger_profile.city:
-            logger.debug(
-                f"[normalize] city: '{insights.blogger_profile.city}' -> '{normalized_city}'"
-            )
+            logger.debug(f"[normalize] city: '{insights.blogger_profile.city}' -> '{normalized_city}'")
             insights.blogger_profile.city = normalized_city
 
     # Переопределение posting_frequency по фактическому posts_per_week
@@ -493,47 +509,28 @@ def _normalize_insights(insights: AIInsights, posts_per_week: float | None) -> N
     corrected_freq = normalize_posting_frequency(original_freq, posts_per_week)
     if corrected_freq != original_freq:
         logger.debug(
-            f"[normalize] posting_frequency: '{original_freq}' -> '{corrected_freq}' "
-            f"(posts_per_week={posts_per_week})"
+            f"[normalize] posting_frequency: '{original_freq}' -> '{corrected_freq}' (posts_per_week={posts_per_week})"
         )
         insights.content.posting_frequency = corrected_freq
 
     # Дедупликация списков в marketing_value
-    insights.marketing_value.best_fit_industries = deduplicate_list(
-        insights.marketing_value.best_fit_industries
-    )
-    insights.marketing_value.not_suitable_for = deduplicate_list(
-        insights.marketing_value.not_suitable_for
-    )
-    insights.marketing_value.values_and_causes = deduplicate_list(
-        insights.marketing_value.values_and_causes
-    )
+    insights.marketing_value.best_fit_industries = deduplicate_list(insights.marketing_value.best_fit_industries)
+    insights.marketing_value.not_suitable_for = deduplicate_list(insights.marketing_value.not_suitable_for)
+    insights.marketing_value.values_and_causes = deduplicate_list(insights.marketing_value.values_and_causes)
 
     # Дедупликация в audience
-    insights.audience_inference.geo_mentions = deduplicate_list(
-        insights.audience_inference.geo_mentions
-    )
-    insights.audience_inference.audience_interests = deduplicate_list(
-        insights.audience_inference.audience_interests
-    )
+    insights.audience_inference.geo_mentions = deduplicate_list(insights.audience_inference.geo_mentions)
+    insights.audience_inference.audience_interests = deduplicate_list(insights.audience_inference.audience_interests)
 
     # Дедупликация в content
-    insights.content.content_language = deduplicate_list(
-        insights.content.content_language
-    )
+    insights.content.content_language = deduplicate_list(insights.content.content_language)
 
     # Дедупликация в commercial
-    insights.commercial.detected_brand_categories = deduplicate_list(
-        insights.commercial.detected_brand_categories
-    )
+    insights.commercial.detected_brand_categories = deduplicate_list(insights.commercial.detected_brand_categories)
 
     # Дедупликация остальных списков
-    insights.blogger_profile.speaks_languages = deduplicate_list(
-        insights.blogger_profile.speaks_languages
-    )
-    insights.lifestyle.pet_types = deduplicate_list(
-        insights.lifestyle.pet_types
-    )
+    insights.blogger_profile.speaks_languages = deduplicate_list(insights.blogger_profile.speaks_languages)
+    insights.lifestyle.pet_types = deduplicate_list(insights.lifestyle.pet_types)
 
 
 async def _retry_enrichment(
@@ -571,23 +568,30 @@ async def _process_blog_result(
         current_blog = current_by_id.get(blog_id, {})
         current_status = current_blog.get("scrape_status")
         if _has_successful_ai_insights(current_blog.get("ai_insights")):
-            logger.info(
-                f"[batch_results] Blog {blog_id}: refusal ignored, "
-                "successful insights already stored"
-            )
+            logger.info(f"[batch_results] Blog {blog_id}: refusal ignored, successful insights already stored")
             return
         already_refused = current_status == "ai_refused"
 
-        await db.table("blogs").update({
-            "ai_insights": {"refusal_reason": refusal_reason},
-            "scrape_status": "ai_analyzed" if already_refused else "ai_refused",
-            "ai_analyzed_at": datetime.now(UTC).isoformat(),
-        }).eq("id", blog_id).execute()
+        await (
+            db.table("blogs")
+            .update(
+                {
+                    "ai_insights": {"refusal_reason": refusal_reason},
+                    "scrape_status": "ai_analyzed" if already_refused else "ai_refused",
+                    "ai_analyzed_at": datetime.now(UTC).isoformat(),
+                }
+            )
+            .eq("id", blog_id)
+            .execute()
+        )
 
         if not already_refused:
             try:
                 await _h.create_task_if_not_exists(
-                    db, blog_id, "ai_analysis", priority=2,
+                    db,
+                    blog_id,
+                    "ai_analysis",
+                    priority=2,
                     payload={"text_only": True},
                 )
             except Exception as e:
@@ -621,10 +625,12 @@ async def _process_blog_result(
             )
 
         # Сохраняем insights + извлечённые поля
-        logger.debug(f"[batch_results] Blog {blog_id}: saving insights "
-                     f"(confidence={insights.confidence}, "
-                     f"page_type={insights.blogger_profile.page_type}, "
-                     f"categories={insights.content.primary_categories})")
+        logger.debug(
+            f"[batch_results] Blog {blog_id}: saving insights "
+            f"(confidence={insights.confidence}, "
+            f"page_type={insights.blogger_profile.page_type}, "
+            f"categories={insights.content.primary_categories})"
+        )
         update_data: dict[str, Any] = {
             "ai_insights": insights.model_dump(),
             "ai_confidence": _CONFIDENCE_TO_FLOAT.get(insights.confidence, 0.60),
@@ -650,9 +656,7 @@ async def _process_blog_result(
         # Матчинг тегов
         tags_stats = {"total": 0, "matched": 0, "unmatched": 0}
         try:
-            tags_stats = await _retry_enrichment(
-                lambda: _h.match_tags(db, blog_id, insights, tags=tags_cache)
-            )
+            tags_stats = await _retry_enrichment(lambda: _h.match_tags(db, blog_id, insights, tags=tags_cache))
         except Exception as e:
             taxonomy_metrics["taxonomy_errors"] += 1
             logger.error(f"Failed to match tags for blog {blog_id}: {e}")
@@ -700,9 +704,7 @@ async def handle_batch_results(
 
     # Батч упал целиком (например, token limit) — ретраим все задачи
     if result["status"] in ("failed", "cancelled"):
-        logger.warning(
-            f"[batch_results] Batch {batch_id} {result['status']}, retrying tasks"
-        )
+        logger.warning(f"[batch_results] Batch {batch_id} {result['status']}, retrying tasks")
         all_task_infos: list[tuple[str, int, int]] = []
         for _blog_id, val in task_ids_by_blog.items():
             items = val if isinstance(val, list) else [val]
@@ -734,11 +736,16 @@ async def handle_batch_results(
     blog_ids_with_results = list(results.keys())
     current_by_id: dict[str, dict[str, Any]] = {}
     if blog_ids_with_results:
-        current_blogs = await db.table("blogs").select(
-            "id, city, content_language, audience_gender,"
-            " audience_age, audience_countries, scrape_status, ai_insights,"
-            " posts_per_week"
-        ).in_("id", blog_ids_with_results).execute()
+        current_blogs = (
+            await db.table("blogs")
+            .select(
+                "id, city, content_language, audience_gender,"
+                " audience_age, audience_countries, scrape_status, ai_insights,"
+                " posts_per_week"
+            )
+            .in_("id", blog_ids_with_results)
+            .execute()
+        )
         current_rows = cast(list[dict[str, Any]], current_blogs.data or [])
         current_by_id = {str(b["id"]): b for b in current_rows}
 
@@ -788,7 +795,9 @@ async def handle_batch_results(
         if insights is None:
             logger.warning(f"[batch_results] Blog {blog_id}: no insights (API error), retry")
             await _safe_fail_tasks(
-                db, task_infos, "OpenAI API error: no insights in batch result",
+                db,
+                task_infos,
+                "OpenAI API error: no insights in batch result",
             )
             continue
 
@@ -798,7 +807,9 @@ async def handle_batch_results(
             # Ошибка одного блога не должна убивать весь батч
             logger.error(f"[batch_results] Blog {blog_id} failed: {e}")
             await _safe_fail_tasks(
-                db, task_infos, f"Error processing batch result: {e}",
+                db,
+                task_infos,
+                f"Error processing batch result: {e}",
             )
             continue
 
@@ -806,9 +817,7 @@ async def handle_batch_results(
             try:
                 await _h.mark_task_done(db, task_id)
             except Exception as done_err:
-                logger.error(
-                    f"[batch_results] Не удалось пометить задачу {task_id} как done: {done_err}"
-                )
+                logger.error(f"[batch_results] Не удалось пометить задачу {task_id} как done: {done_err}")
 
     # Expired батч: задачи без результатов → retry (не ждать 26ч retry_stale_batches)
     if result["status"] == "expired":
@@ -819,7 +828,9 @@ async def handle_batch_results(
                     logger.warning(f"Skipping expired retry for {blog_id}: no task_id")
                     continue
                 await _safe_fail_tasks(
-                    db, task_infos, "Batch expired without result for this task",
+                    db,
+                    task_infos,
+                    "Batch expired without result for this task",
                 )
 
     # Параллельная генерация embedding для всех блогов батча
@@ -833,9 +844,16 @@ async def handle_batch_results(
                 vector = await _h.generate_embedding(openai_client, text)
                 if vector:
                     async with embed_semaphore:
-                        await db.table("blogs").update({
-                            "embedding": vector,
-                        }).eq("id", blog_id).execute()
+                        await (
+                            db.table("blogs")
+                            .update(
+                                {
+                                    "embedding": vector,
+                                }
+                            )
+                            .eq("id", blog_id)
+                            .execute()
+                        )
                     logger.debug(f"[batch_results] Blog {blog_id}: embedding saved ({len(vector)} dim)")
                 else:
                     logger.warning(f"[batch_results] Blog {blog_id}: embedding не сгенерирован (rate limit?)")
@@ -843,10 +861,7 @@ async def handle_batch_results(
                 logger.error(f"Failed to generate embedding for blog {blog_id}: {e}")
 
         logger.info(f"[batch_results] Generating {len(ctx.pending_embeddings)} embeddings in parallel...")
-        await asyncio.gather(*[
-            _generate_and_save(blog_id, text)
-            for blog_id, text in ctx.pending_embeddings
-        ])
+        await asyncio.gather(*[_generate_and_save(blog_id, text) for blog_id, text in ctx.pending_embeddings])
 
     # Сохраняем usage токенов в batch_usage_log и логируем стоимость
     batch_usage: dict[str, int] = cast(dict[str, int], result.get("usage")) or {}
@@ -861,24 +876,28 @@ async def handle_batch_results(
     # Batch скидка 50%: input $0.075/1M, cached $0.0375/1M, output $0.30/1M
     non_cached_input = input_tokens - cached_tokens
     cost_usd = (
-        non_cached_input * 0.075 / 1_000_000
-        + cached_tokens * 0.0375 / 1_000_000
-        + output_tokens * 0.30 / 1_000_000
+        non_cached_input * 0.075 / 1_000_000 + cached_tokens * 0.0375 / 1_000_000 + output_tokens * 0.30 / 1_000_000
     )
 
     if total_tokens > 0:
         try:
-            await db.table("batch_usage_log").insert({
-                "batch_id": batch_id,
-                "model": "gpt-5-mini",
-                "request_count": len(results),
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "total_tokens": total_tokens,
-                "reasoning_tokens": reasoning_tokens,
-                "cached_tokens": cached_tokens,
-                "cost_usd": round(cost_usd, 6),
-            }).execute()
+            await (
+                db.table("batch_usage_log")
+                .insert(
+                    {
+                        "batch_id": batch_id,
+                        "model": "gpt-5-mini",
+                        "request_count": len(results),
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": total_tokens,
+                        "reasoning_tokens": reasoning_tokens,
+                        "cached_tokens": cached_tokens,
+                        "cost_usd": round(cost_usd, 6),
+                    }
+                )
+                .execute()
+            )
         except Exception as usage_err:
             logger.warning(f"[batch_results] Не удалось сохранить usage для {batch_id}: {usage_err}")
 
