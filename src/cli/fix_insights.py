@@ -24,41 +24,8 @@ from supabase import create_async_client
 
 from src.config import load_settings
 
-# Маппинг англоязычных стран → русские названия
-_COUNTRY_MAP: dict[str, str] = {
-    "kazakhstan": "Казахстан",
-    "kz": "Казахстан",
-    "қазақстан": "Казахстан",
-    "qazaqstan": "Казахстан",
-    "russia": "Россия",
-    "ru": "Россия",
-    "uzbekistan": "Узбекистан",
-    "uz": "Узбекистан",
-    "kyrgyzstan": "Кыргызстан",
-    "kg": "Кыргызстан",
-    "tajikistan": "Таджикистан",
-    "turkmenistan": "Туркменистан",
-    "azerbaijan": "Азербайджан",
-    "georgia": "Грузия",
-    "armenia": "Армения",
-    "turkey": "Турция",
-    "tr": "Турция",
-    "uae": "ОАЭ",
-    "united arab emirates": "ОАЭ",
-    "china": "Китай",
-    "south korea": "Южная Корея",
-    "japan": "Япония",
-    "usa": "США",
-    "united states": "США",
-    "uk": "Великобритания",
-    "united kingdom": "Великобритания",
-    "germany": "Германия",
-    "france": "Франция",
-    "italy": "Италия",
-    "spain": "Испания",
-    "canada": "Канада",
-    "australia": "Австралия",
-}
+# Нормализация страны — единый источник в ai_handler
+from src.worker.ai_handler import _normalize_country
 
 # Паттерн для удаления префиксов индустрий
 _PREFIX_RE = re.compile(r"^(?:п[oо]дх[oо]дит для |не подходит для )", re.IGNORECASE)
@@ -100,12 +67,12 @@ def _fix_insights(insights: dict[str, Any], ppw: float | None) -> tuple[dict[str
     """Исправить ai_insights, вернуть (fixed_insights, list_of_changes)."""
     changes: list[str] = []
 
-    # 1. Country нормализация
+    # 1. Country нормализация (используем общую функцию с fuzzy matching)
     bp = insights.get("blogger_profile", {})
     if isinstance(bp, dict):
         country = bp.get("country")
         if country and isinstance(country, str):
-            normalized = _COUNTRY_MAP.get(country.lower().strip())
+            normalized = _normalize_country(country)
             if normalized and normalized != country:
                 bp["country"] = normalized
                 changes.append(f"country: '{country}' → '{normalized}'")

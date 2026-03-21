@@ -462,44 +462,204 @@ def _dedup_brands(brands: list[str]) -> list[str]:
     return unique
 
 
-# Маппинг англоязычных стран → русские названия
+# Маппинг стран → русские названия (lowercase ключи)
+# Включает: ISO-коды, английские/нативные названия, частые опечатки GPT
 _COUNTRY_NORMALIZE: dict[str, str] = {
+    # Казахстан — все варианты
     "kazakhstan": "Казахстан",
+    "kazahstan": "Казахстан",
+    "kazakstan": "Казахстан",
+    "kazakhtan": "Казахстан",
+    "kazakistan": "Казахстан",
+    "republic of kazakhstan": "Казахстан",
+    "qazaqstan": "Казахстан",
+    "қазақстан": "Казахстан",
+    "kz": "Казахстан",
+    # Россия
     "russia": "Россия",
+    "russian federation": "Россия",
+    "россия": "Россия",
+    "рф": "Россия",
+    "ru": "Россия",
+    # Узбекистан
     "uzbekistan": "Узбекистан",
+    "uzbekstan": "Узбекистан",
+    "republic of uzbekistan": "Узбекистан",
+    "ўзбекистон": "Узбекистан",
+    "o'zbekiston": "Узбекистан",
+    "uz": "Узбекистан",
+    # Кыргызстан
     "kyrgyzstan": "Кыргызстан",
+    "kirgizstan": "Кыргызстан",
+    "kirgizia": "Кыргызстан",
+    "kyrgyz republic": "Кыргызстан",
+    "кыргызстан": "Кыргызстан",
+    "kg": "Кыргызстан",
+    # Таджикистан
     "tajikistan": "Таджикистан",
+    "tadzhikistan": "Таджикистан",
+    "republic of tajikistan": "Таджикистан",
+    "tj": "Таджикистан",
+    # Туркменистан
     "turkmenistan": "Туркменистан",
+    "tm": "Туркменистан",
+    # Азербайджан
     "azerbaijan": "Азербайджан",
+    "azerbaidjan": "Азербайджан",
+    "az": "Азербайджан",
+    # Грузия
     "georgia": "Грузия",
+    "ge": "Грузия",
+    # Армения
     "armenia": "Армения",
+    "am": "Армения",
+    # Турция
     "turkey": "Турция",
+    "türkiye": "Турция",
+    "turkiye": "Турция",
+    "tr": "Турция",
+    # Ближний Восток
     "uae": "ОАЭ",
     "united arab emirates": "ОАЭ",
+    "оаэ": "ОАЭ",
+    "ae": "ОАЭ",
     "qatar": "Катар",
+    "qa": "Катар",
+    "saudi arabia": "Саудовская Аравия",
+    "sa": "Саудовская Аравия",
+    "bahrain": "Бахрейн",
+    "israel": "Израиль",
+    "il": "Израиль",
+    # Азия
     "china": "Китай",
+    "cn": "Китай",
     "south korea": "Южная Корея",
+    "korea": "Южная Корея",
+    "kr": "Южная Корея",
     "japan": "Япония",
+    "jp": "Япония",
+    "india": "Индия",
+    "in": "Индия",
+    "malaysia": "Малайзия",
+    "my": "Малайзия",
+    "thailand": "Таиланд",
+    "th": "Таиланд",
+    "indonesia": "Индонезия",
+    "id": "Индонезия",
+    "singapore": "Сингапур",
+    "sg": "Сингапур",
+    "mongolia": "Монголия",
+    "mn": "Монголия",
+    # Европа
     "usa": "США",
     "united states": "США",
+    "united states of america": "США",
+    "us": "США",
     "uk": "Великобритания",
     "united kingdom": "Великобритания",
+    "great britain": "Великобритания",
+    "england": "Великобритания",
+    "gb": "Великобритания",
     "germany": "Германия",
+    "de": "Германия",
     "france": "Франция",
+    "fr": "Франция",
     "italy": "Италия",
+    "it": "Италия",
     "spain": "Испания",
+    "es": "Испания",
     "canada": "Канада",
+    "ca": "Канада",
     "australia": "Австралия",
-    "kz": "Казахстан",
-    "қазақстан": "Казахстан",
+    "au": "Австралия",
+    "poland": "Польша",
+    "pl": "Польша",
+    "czech republic": "Чехия",
+    "czechia": "Чехия",
+    "cz": "Чехия",
+    "netherlands": "Нидерланды",
+    "nl": "Нидерланды",
+    "belgium": "Бельгия",
+    "austria": "Австрия",
+    "at": "Австрия",
+    "switzerland": "Швейцария",
+    "ch": "Швейцария",
+    "sweden": "Швеция",
+    "se": "Швеция",
+    "norway": "Норвегия",
+    "finland": "Финляндия",
+    "denmark": "Дания",
+    "portugal": "Португалия",
+    "greece": "Греция",
+    "hungary": "Венгрия",
+    "romania": "Румыния",
+    "bulgaria": "Болгария",
+    "serbia": "Сербия",
+    "croatia": "Хорватия",
+    # СНГ / Восточная Европа
+    "ukraine": "Украина",
+    "ua": "Украина",
+    "belarus": "Беларусь",
+    "by": "Беларусь",
+    "moldova": "Молдова",
+    "md": "Молдова",
+    "latvia": "Латвия",
+    "lithuania": "Литва",
+    "estonia": "Эстония",
+    # Африка / Латинская Америка
+    "egypt": "Египет",
+    "eg": "Египет",
+    "morocco": "Марокко",
+    "tunisia": "Тунис",
+    "south africa": "ЮАР",
+    "brazil": "Бразилия",
+    "br": "Бразилия",
+    "mexico": "Мексика",
+    "mx": "Мексика",
+    "argentina": "Аргентина",
 }
+
+# Множество валидных русских названий — если уже на русском, не трогаем
+_VALID_RUSSIAN_COUNTRIES: frozenset[str] = frozenset(_COUNTRY_NORMALIZE.values())
 
 
 def _normalize_country(country: str | None) -> str | None:
-    """Нормализовать страну к русскому названию."""
+    """Нормализовать страну к русскому названию.
+
+    Стратегия:
+    1. Точное совпадение по словарю (lowercase)
+    2. Если уже валидное русское название — оставить
+    3. Если строка на латинице — попробовать fuzzy-поиск по ключам словаря
+    4. Иначе вернуть как есть (может быть корректное русское название не из словаря)
+    """
     if not country:
         return None
-    return _COUNTRY_NORMALIZE.get(country.lower().strip(), country)
+
+    cleaned = country.strip()
+    if not cleaned:
+        return None
+
+    # 1. Точное совпадение
+    key = cleaned.lower()
+    if key in _COUNTRY_NORMALIZE:
+        return _COUNTRY_NORMALIZE[key]
+
+    # 2. Уже валидное русское название
+    if cleaned in _VALID_RUSSIAN_COUNTRIES:
+        return cleaned
+
+    # 3. Fuzzy-поиск для латиницы (ловим опечатки вроде "Kazakhsan", "Uzbekstan")
+    if cleaned.isascii():
+        from difflib import get_close_matches
+
+        matches = get_close_matches(key, _COUNTRY_NORMALIZE.keys(), n=1, cutoff=0.8)
+        if matches:
+            result = _COUNTRY_NORMALIZE[matches[0]]
+            logger.debug(f"[normalize] country fuzzy: '{cleaned}' -> '{result}' (matched '{matches[0]}')")
+            return result
+
+    # 4. Вернуть как есть
+    return cleaned
 
 
 _PostingFrequency = Literal["rare", "weekly", "several_per_week", "daily"]
